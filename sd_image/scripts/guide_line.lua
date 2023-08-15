@@ -1,5 +1,5 @@
 -- 
-local GUIDING_TIME = 100
+local GUIDING_TIME = 200
 local WAITING_TIME = 250
 
 local PLANE_MODE_GUIDED        = 15
@@ -10,58 +10,120 @@ local guider = nil
 
 local target_alt_above_home = 25
 
-local function Equirect_projection(loc)
-    local self = {}
+local function Equirect_projection(ref_loc)
+    local obj = {}
 
-    local radius_m = 6371000.0
+    obj.EARTH_RADIUS_M = 6371000.0
 
-    local base_lat_r = math.rad(loc:lat()/10000000.0)
-    local base_lng_r = math.rad(loc:lng()/10000000.0)
-    local base_cos_lat = math.cos(base_lat_r)
+    obj.base_lat_r = math.rad(ref_loc:lat()/10000000.0)
+    obj.base_lng_r = math.rad(ref_loc:lng()/10000000.0)
+    obj.base_cos_lat = math.cos(obj.base_lat_r)
 
-    function self.latlng_to_xy(lat, lng)
-        local delta_lat_r = math.rad(lat/10000000.0) - base_lat_r
-        local delta_lng_r = math.rad(lng/10000000.0) - base_lng_r
-        return delta_lat_r * radius_m, delta_lng_r * radius_m * base_cos_lat
+    function obj.latlng_to_xy(self, lat, lng)
+        local delta_lat_r = math.rad(lat/10000000.0) - self.base_lat_r
+        local delta_lng_r = math.rad(lng/10000000.0) - self.base_lng_r
+        return delta_lat_r * self.EARTH_RADIUS_M, delta_lng_r * self.EARTH_RADIUS_M * self.base_cos_lat
     end
 
-    function self.xy_to_latlng(x, y)
-        local delta_lat_r = x / radius_m
-        local delta_lng_r = y / radius_m / base_cos_lat
-        return math.deg(delta_lat_r + base_lat_r) * 10000000.0, math.deg(delta_lng_r + base_lng_r) * 10000000.0
+    function obj.xy_to_latlng(self, x, y)
+        local delta_lat_r = x / self.EARTH_RADIUS_M
+        local delta_lng_r = y / self.EARTH_RADIUS_M / self.base_cos_lat
+        return math.deg(delta_lat_r + self.base_lat_r) * 10000000.0, math.deg(delta_lng_r + self.base_lng_r) * 10000000.0
     end
 
-    return self
+    function obj.loc_to_vm(self, loc)
+        local vm = Vector2f()
+        local x, y = self:latlng_to_xy(loc:lat(), loc:lng())
+        vm:x(x)
+        vm:y(y)
+        return vm
+    end
+
+    function obj.vm_in_loc(self, vm, loc)
+        local lat, lng = self:xy_to_latlng(vm:x(), vm:y())
+        loc:lat(lat)
+        loc:lng(lng)
+    end
+
+    return obj
+end
+
+local function Line_calc_targets(erp, end_coords_vm, end_time_ms, delta_time_ms, target_extension_m)
+
+    local beg_time_ms = millis():tofloat()
+    assert(end_time_ms - beg_time_ms > 1, "Can only calc a new target into the future")
+
+    local beg_coords_vm = erp:loc_to_vm(ahrs:get_location())
+
+    local desired_speed_vmps = Vector2f()
+    local tot_time_s = (end_time_ms - beg_time_ms) / 1000.0
+    desired_speed_vmps:x((end_coords_vm:x() - beg_coords_vm:x()) / tot_time_s)
+    desired_speed_vmps:y((end_coords_vm:y() - beg_coords_vm:y()) / tot_time_s)
+
+    local function calc_next_target()
+        local cur_time_ms = millis():tofloat()
+        if (cur_time_ms >= end_time_ms) then
+            return nil
+        end
+ 
+        local delta_nxt_time_s = (cur_time_ms - beg_time_ms + delta_time_ms) / 1000.0
+        local nxt_coords_vm = Vector2f()
+        nxt_coords_vm:x(desired_speed_vmps:x() * delta_nxt_time_s)
+        nxt_coords_vm:y(desired_speed_vmps:y() * delta_nxt_time_s)
+        nxt_coords_vm = nxt_coords_vm + beg_coords_vm
+
+        local wrk_loc = ahrs:get_location():copy()
+        local cur_coords_vm = erp:loc_to_vm(wrk_loc)
+        local cur_nxt_vm = nxt_coords_vm - cur_coords_vm
+        local cur_nxt_length = cur_nxt_vm:length()
+        cur_nxt_vm:x(cur_nxt_vm:x()/cur_nxt_length * target_extension_m)
+        cur_nxt_vm:y(cur_nxt_vm:y()/cur_nxt_length * target_extension_m)
+
+        local tar_coords_vm = nxt_coords_vm + cur_nxt_vm
+        erp:vm_in_loc(tar_coords_vm, wrk_loc)
+        return wrk_loc
+    end
+
+    return calc_next_target
 end
 
 local function Guider()
     local self = {}
 
+    local GIDED_PATH_LENGTH_M = 500.0
+
     local saved_mode = vehicle:get_mode()
     vehicle:set_mode(PLANE_MODE_GUIDED)
 
-    local erp = Equirect_projection(ahrs:get_location())
-    local base_vel = ahrs:get_velocity_NED()
-    local delta_x_m = GUIDING_TIME * base_vel:x() * 200.0 / 1000.0
-    local delta_y_m = GUIDING_TIME * base_vel:y() * 200.0 / 1000.0
-    local last_target_loc = nil
+    local beg_loc = ahrs:get_location()
+    local erp = Equirect_projection(beg_loc)
+
+    local base_vel_vmps = ahrs:get_velocity_NED()
+    local base_speed_mps = base_vel_vmps:length()
+    --base_speed_mps = 12.0
+    base_vel_vmps:x(base_speed_mps)
+    base_vel_vmps:y(0)
+    local guided_path_vm = Vector2f();
+    guided_path_vm:x(base_vel_vmps:x()/base_speed_mps * GIDED_PATH_LENGTH_M)
+    guided_path_vm:y(base_vel_vmps:y()/base_speed_mps * GIDED_PATH_LENGTH_M)
+
+    local end_coords_vm = erp:loc_to_vm(beg_loc)
+    end_coords_vm = end_coords_vm + guided_path_vm
+    local end_time_ms = millis():tofloat() + 1000.0 * GIDED_PATH_LENGTH_M / base_speed_mps
+
+    local calc_targets = Line_calc_targets(erp, end_coords_vm, end_time_ms, GUIDING_TIME, 2500)
 
     function self.guide()
-        local loc = ahrs:get_location()
-        local x_m, y_m = erp.latlng_to_xy(loc:lat(), loc:lng())
+        local target_loc = calc_targets()
+        if not target_loc then
+            return false
+        end
 
-        local new_x_m = x_m + delta_x_m
-        local new_y_m = y_m + delta_y_m
+        local target_vm = erp:loc_to_vm(target_loc) 
+        gcs:send_text(0, string.format("guide %.2f, %.2f, %.0f", target_vm:x(), target_vm:y(), target_loc:alt()))
 
-        local new_lat, new_lng = erp.xy_to_latlng(new_x_m, new_y_m)
-
-        local new_loc = loc:copy()
-        new_loc:lat(new_lat)
-        new_loc:lng(new_lng)
-
-        vehicle:set_target_location(new_loc)
-        ahrs:set_home(new_loc)
-        gcs:send_text(0, string.format("guide %.2f, %.2f, %.2f, %.2f", loc:lat(), new_lat, loc:lng(), new_lng))
+        vehicle:set_target_location(target_loc)
+         return true
      end
 
     function self.finish()
@@ -73,27 +135,44 @@ end
 
 -- forward declarations of local functions
 local goto_guiding
+local goto_complete
 local goto_waiting
 local state_guiding
+local state_complete
 local state_waiting
 
 goto_guiding = function()
+    gcs:send_text(0, string.format("Start guiding"))
     guider = Guider()
     return state_guiding, 0
 end
 
-goto_waiting = function()
+goto_complete = function()
     guider.finish()
     guider = nil
+    gcs:send_text(0, string.format("Finish guiding"))
+    return state_complete, 0
+end
+
+goto_waiting = function()
     return state_waiting, 0
 end
 
 state_guiding = function()
     if enable_switch:get_aux_switch_pos() ~= 2 then
+        return goto_complete()
+    end
+    if not guider.guide() then
+        return goto_complete()
+    end
+    return state_guiding, GUIDING_TIME
+end
+
+state_complete = function()
+    if enable_switch:get_aux_switch_pos() ~= 2 then
         return goto_waiting()
     end
-    guider.guide()
-    return state_guiding, GUIDING_TIME
+     return state_complete, WAITING_TIME
 end
 
 state_waiting = function()
