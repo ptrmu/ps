@@ -15,20 +15,20 @@ local function Equirect_projection(ref_loc)
 
     obj.EARTH_RADIUS_M = 6371000.0
 
-    obj.base_lat_r = math.rad(ref_loc:lat()/10000000.0)
-    obj.base_lng_r = math.rad(ref_loc:lng()/10000000.0)
-    obj.base_cos_lat = math.cos(obj.base_lat_r)
+    obj.ref_lat_r = math.rad(ref_loc:lat()/10000000.0)
+    obj.ref_lng_r = math.rad(ref_loc:lng()/10000000.0)
+    obj.ref_cos_lat = math.cos(obj.ref_lat_r)
 
     function obj.latlng_to_xy(self, lat, lng)
-        local delta_lat_r = math.rad(lat/10000000.0) - self.base_lat_r
-        local delta_lng_r = math.rad(lng/10000000.0) - self.base_lng_r
-        return delta_lat_r * self.EARTH_RADIUS_M, delta_lng_r * self.EARTH_RADIUS_M * self.base_cos_lat
+        local delta_lat_r = math.rad(lat/10000000.0) - self.ref_lat_r
+        local delta_lng_r = math.rad(lng/10000000.0) - self.ref_lng_r
+        return delta_lat_r * self.EARTH_RADIUS_M, delta_lng_r * self.EARTH_RADIUS_M * self.ref_cos_lat
     end
 
     function obj.xy_to_latlng(self, x, y)
         local delta_lat_r = x / self.EARTH_RADIUS_M
-        local delta_lng_r = y / self.EARTH_RADIUS_M / self.base_cos_lat
-        return math.deg(delta_lat_r + self.base_lat_r) * 10000000.0, math.deg(delta_lng_r + self.base_lng_r) * 10000000.0
+        local delta_lng_r = y / self.EARTH_RADIUS_M / self.ref_cos_lat
+        return math.deg(delta_lat_r + self.ref_lat_r) * 10000000.0, math.deg(delta_lng_r + self.ref_lng_r) * 10000000.0
     end
 
     function obj.loc_to_vm(self, loc)
@@ -99,6 +99,10 @@ local function Guider()
     local erp = Equirect_projection(beg_loc)
 
     local base_vel_vmps = ahrs:get_velocity_NED()
+    if not base_vel_vmps then
+        return nil
+    end
+
     local base_speed_mps = base_vel_vmps:length()
     --base_speed_mps = 12.0
     base_vel_vmps:x(base_speed_mps)
@@ -133,33 +137,31 @@ local function Guider()
     return self
 end
 
--- forward declarations of local functions
-local goto_guiding
-local goto_complete
-local goto_waiting
-local state_guiding
-local state_complete
-local state_waiting
 
-goto_guiding = function()
-    gcs:send_text(0, string.format("Start guiding"))
-    guider = Guider()
-    return state_guiding, 0
+
+-- forward declarations of local functions
+local state_not_ready
+
+local function test_go(switch_true)
+    if not arming:is_armed() then
+        return false
+    end
+    return (enable_switch:get_aux_switch_pos() == 2) == switch_true
 end
 
-goto_complete = function()
+local function goto_not_ready()
+    return state_not_ready, 0
+end
+
+local function goto_complete()
+    gcs:send_text(0, string.format("Finish guiding"))
     guider.finish()
     guider = nil
-    gcs:send_text(0, string.format("Finish guiding"))
-    return state_complete, 0
+    return goto_not_ready()
 end
 
-goto_waiting = function()
-    return state_waiting, 0
-end
-
-state_guiding = function()
-    if enable_switch:get_aux_switch_pos() ~= 2 then
+ local function state_guiding()
+    if test_go(false) then
         return goto_complete()
     end
     if not guider.guide() then
@@ -168,20 +170,30 @@ state_guiding = function()
     return state_guiding, GUIDING_TIME
 end
 
-state_complete = function()
-    if enable_switch:get_aux_switch_pos() ~= 2 then
-        return goto_waiting()
+local function goto_guiding()
+    guider = Guider()
+    if not guider then
+        gcs:send_text(0, string.format("Start guiding failed: no guiding object"))
+        return goto_not_ready()
     end
-     return state_complete, WAITING_TIME
+    gcs:send_text(0, string.format("Start guiding"))
+    return state_guiding, 0
 end
 
-state_waiting = function()
-    if arming:is_armed() and enable_switch:get_aux_switch_pos() == 2 then
+ local function state_ready()
+    if test_go(true) then
         return goto_guiding()
     end
-    return state_waiting, WAITING_TIME
+    return state_ready, WAITING_TIME
+end
+
+state_not_ready = function()
+    if test_go(false) then
+        return state_ready, 0
+    end
+    return state_not_ready, WAITING_TIME
 end
 
 gcs:send_text(0, string.format("Loaded guide_line.lua"))
 
-return state_waiting()
+return state_not_ready()
