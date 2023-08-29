@@ -105,8 +105,8 @@ local function Guider()
 
     local base_speed_mps = base_vel_vmps:length()
     --base_speed_mps = 12.0
-    base_vel_vmps:x(base_speed_mps)
-    base_vel_vmps:y(0)
+    base_vel_vmps:x(0)
+    base_vel_vmps:y(base_speed_mps)
     local guided_path_vm = Vector2f();
     guided_path_vm:x(base_vel_vmps:x()/base_speed_mps * GIDED_PATH_LENGTH_M)
     guided_path_vm:y(base_vel_vmps:y()/base_speed_mps * GIDED_PATH_LENGTH_M)
@@ -181,6 +181,7 @@ local function goto_guiding()
 end
 
  local function state_ready()
+    -- Wait until the trigger switch is on before starting guiding.
     if test_go(true) then
         return goto_guiding()
     end
@@ -188,6 +189,7 @@ end
 end
 
 state_not_ready = function()
+    -- Ensure the trigger switch is off. This prevents guiding if reboot with switch on.
     if test_go(false) then
         return state_ready, 0
     end

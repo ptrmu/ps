@@ -181,6 +181,7 @@ local function goto_guiding()
 end
 
  local function state_ready()
+    -- Wait until the trigger switch is on before starting guiding.
     if test_go(true) then
         return goto_guiding()
     end
@@ -188,6 +189,7 @@ end
 end
 
 state_not_ready = function()
+    -- Ensure the trigger switch is off. This prevents guiding if reboot with switch on.
     if test_go(false) then
         return state_ready, 0
     end
