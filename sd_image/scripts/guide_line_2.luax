@@ -1,4 +1,65 @@
 -- 
+
+local TEST_NAME = "GL"
+
+--#region GCS messaging
+
+---@param str1 string
+local function gcs_send(str1)
+    gcs:send_text(6, string.format("%s: %s", TEST_NAME, str1))
+end
+
+local gcs_send_trim = (function()
+    local gcs_send_times = {}
+    local gcs_eaten_count = {}
+    local GCS_SEND_PERIOD_S = 1.0
+
+    ---@param str1 string
+    ---@param str2 string
+    local function func(str1, str2)
+        if not str1 then return end
+
+        local time_curr_s = millis():tofloat() / 1000.0
+        local time_first_s = gcs_send_times[str1]
+        if (time_first_s) then
+            local dur_since_first = time_curr_s - time_first_s
+            if dur_since_first < GCS_SEND_PERIOD_S then
+                if not gcs_eaten_count[str1] then
+                    gcs_eaten_count[str1] = 0
+                end
+                gcs_eaten_count[str1] = gcs_eaten_count[str1] + 1
+                return
+            end
+        end
+
+        local send_str = nil
+        local eaten_count = gcs_eaten_count[str1]
+        if eaten_count then
+            gcs_eaten_count[str1] = nil
+            if str2 then
+                send_str = string.format("%s %s (+%i)", str1, str2, eaten_count)
+            else
+                send_str = string.format("%s (+%i)", str1, eaten_count)
+            end
+        else
+            if str2 then
+                send_str = string.format("%s %s", str1, str2)
+            else
+                send_str = string.format("%s", str1)
+            end
+        end
+
+        gcs_send(send_str)
+        gcs_send_times[str1] = time_curr_s
+    end
+
+    return func
+end)()
+
+
+--#endregion
+
+
 local GUIDING_TIME = 200
 local WAITING_TIME = 250
 
@@ -6,6 +67,7 @@ local PLANE_MODE_GUIDED        = 15
 
 local enable_switch = rc:find_channel_for_option(300)
 
+---@type 
 local guider = nil
 
 local target_alt_above_home = 25
@@ -87,6 +149,7 @@ local function Line_calc_targets(erp, end_coords_vm, end_time_ms, delta_time_ms,
     return calc_next_target
 end
 
+
 local function Guider()
     local self = {}
 
@@ -115,7 +178,7 @@ local function Guider()
     end_coords_vm = end_coords_vm + guided_path_vm
     local end_time_ms = millis():tofloat() + 1000.0 * GIDED_PATH_LENGTH_M / base_speed_mps
 
-    local calc_targets = Line_calc_targets(erp, end_coords_vm, end_time_ms, GUIDING_TIME, 2500)
+    local calc_targets = Line_calc_targets(erp, end_coords_vm, end_time_ms, GUIDING_TIME, -100)
 
     function self.guide()
         local target_loc = calc_targets()
