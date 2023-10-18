@@ -67,7 +67,6 @@ local PLANE_MODE_GUIDED        = 15
 
 local enable_switch = rc:find_channel_for_option(300)
 
----@type 
 local guider = nil
 
 local target_alt_above_home = 25
@@ -180,7 +179,7 @@ local function Guider()
 
     local calc_targets = Line_calc_targets(erp, end_coords_vm, end_time_ms, GUIDING_TIME, -100)
 
-    function self.guide()
+    self.guide = function()
         local target_loc = calc_targets()
         if not target_loc then
             return false
@@ -193,7 +192,7 @@ local function Guider()
          return true
      end
 
-    function self.finish()
+    self.finish = function()
         vehicle:set_mode(saved_mode)
     end
 
