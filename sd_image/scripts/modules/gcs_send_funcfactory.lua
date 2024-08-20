@@ -1,6 +1,8 @@
 
+-- gcs messaging function. Pass two strings and the function will drop frequent messages
 
-local gcs_send_funcfact = function(name, eat_messages_period_s, msg_severity)
+
+local gcs_send_funcfactory = function(name, eat_messages_period_s, msg_severity)
     local gcs_send_times = {}
     local gcs_eaten_count = {}
 
@@ -33,17 +35,9 @@ local gcs_send_funcfact = function(name, eat_messages_period_s, msg_severity)
             local eaten_count = gcs_eaten_count[str1]
             if eaten_count then
                 gcs_eaten_count[str1] = nil
-                if str2 then
-                    send_str = string.format("%s: %s %s (+%i)", name, str1, str2, eaten_count)
-                else
-                    send_str = string.format("%s: %s (+%i)", name, str1, eaten_count)
-                end
+                send_str = string.format("%s: %s %s (+%i)", name, str1, str2, eaten_count)
             else
-                if str2 then
-                    send_str = string.format("%s: %s %s", name, str1, str2)
-                else
-                    send_str = string.format("%s: %s", name, str1)
-                end
+                send_str = string.format("%s: %s %s", name, str1, str2)
             end
 
             gcs_send_times[str1] = time_curr_s
@@ -53,4 +47,4 @@ local gcs_send_funcfact = function(name, eat_messages_period_s, msg_severity)
     end
 end
 
-return gcs_send_funcfact
+return gcs_send_funcfactory

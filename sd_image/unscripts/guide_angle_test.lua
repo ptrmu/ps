@@ -18,7 +18,7 @@ local target_alt_above_home = 25
 
 local function Guider()
 
-    local MAX_GUIDE_ANGLE_D = 90.0
+    local MAX_GUIDE_ANGLE_D = 50.0
 
     if not angle_slider then
         gcs_send("Error: no RC channels set up enabling or selecting angle")
@@ -95,7 +95,7 @@ local function Guider()
         local alpha_rate_c_dps = alpha_c_l_d / t_delta_s
 
         -- Determine the direction from here for the guide point.
-        local alpha_g_c_d = math.floor(((1 + angle_slider:norm_input()) * MAX_GUIDE_ANGLE_D + 5.0)/10.0) * 10.0 - MAX_GUIDE_ANGLE_D
+        local alpha_g_c_d = math.floor(((1 + angle_slider:norm_input()) * -MAX_GUIDE_ANGLE_D + 5.0)/10.0) * 10.0 + MAX_GUIDE_ANGLE_D
         local alpha_g_n_d = alpha_g_c_d + alpha_c_n_d
 
         local curvature = math.rad(alpha_rate_c_dps) / speed_cur_mps
