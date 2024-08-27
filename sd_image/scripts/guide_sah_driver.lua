@@ -1,11 +1,11 @@
 
 
-local gcs_send = require("gcs_send_funcfactory")("GRC")
+local gcs_send = require("gcs_send_funcfactory")("GSAH")
 local wrap_angle = require("wrap_angle_obj")
 local switch_exec_updatefactory = require("switch_exec_updatefactory")
 
 
-local GUIDING_TIME_MS = 300
+local GUIDING_TIME_MS = 200
 
 local PLANE_MODE_GUIDED        = 15
 
@@ -42,7 +42,12 @@ end
 -- Calculate a max curvature that is reasonable for a speed of 25 mps
 local lateral_acceleration_max = 9.8 * math.atan(math.rad(roll_limit_deg))
 
-local function StateCurrent(state_base)
+local function StateCurrent(state_start, state_last)
+
+    if state_last and state_last.state_start() ~= state_start then
+        gcs_send("Error: tate_last.state_start() ~= state_start .")
+        return nil
+    end
 
     local loc_cur = ahrs:get_location()
     local vel_cur_vmps = ahrs:get_velocity_NED()
@@ -50,7 +55,7 @@ local function StateCurrent(state_base)
         gcs_send("Error: cannot get location.")
         return nil
     end
-    loc_cur:change_alt_frame(0)
+    loc_cur:change_alt_frame(1)
 
     local vel_cur_2mps = Vector2f()
     vel_cur_2mps:x(vel_cur_vmps:x())
@@ -58,12 +63,48 @@ local function StateCurrent(state_base)
 
     local time_cur = millis():tofloat() * 0.001
 
+    local function vel_bearing()
+        return vel_cur_2mps:angle()
+    end
+
+    local function speed()
+        return vel_cur_2mps:length()
+    end
+
+    local function time()
+        return time_cur
+    end
+
+    local function time_delta()
+        return time() - state_last.time()
+    end
+
+    local function speed_avg()
+        return (speed() + state_last.speed()) / 2
+    end
+
+    local function curvature()
+        local time_delta_tmp = time_delta()
+        if time_delta_tmp == 0 then
+            return 0
+        end
+        return wrap_angle.rad_pi(vel_bearing() - state_last.vel_bearing()) / time_delta_tmp / speed_avg()
+    end
+
     return {
-        vel_bearing = function() return vel_cur_2mps:angle() end,
-        speed = function() return vel_cur_2mps:length() end,
-        time = function() return time_cur end,
+        vel_bearing = vel_bearing,
+        speed = speed,
+        time = time,
         loc = function() return loc_cur:copy() end,
-        duration = function() return time_cur - state_base.time() end,
+        alt = function() return loc_cur:alt() * 0.01 end,
+
+        time_delta = time_delta,
+        speed_avg = speed_avg,
+        curvature = curvature,
+        clear_last = function() state_last = nil end,
+
+        state_start = function() return state_start end,
+        time_total = function() return time_cur - state_start.time() end,
     }
 end
 
@@ -71,20 +112,18 @@ end
 local function Guider()
 
     local state_start = StateCurrent()
+    local state_last = StateCurrent(state_start)
+
     if not state_start then
         return nil
     end
 
-    -- All the failure modes have passed so we can enable guiding. A question is
-    -- should we have set a target wp before enabling guiding. For now no but this needs checking
     local saved_mode = vehicle:get_mode()
     vehicle:set_mode(PLANE_MODE_GUIDED)
 
     local function finish()
         vehicle:set_mode(saved_mode)
     end
-
-    local state_last = state_start
 
     return function(abort)
 
@@ -98,7 +137,7 @@ local function Guider()
             return false
         end
 
-        local state_now = StateCurrent(state_start)
+        local state_now = StateCurrent(state_start, state_last)
         if not state_now then
             return false
         end
@@ -141,7 +180,8 @@ local function Guider()
         end
         curvature_desired = curvature_desired * curvature_desired  -- add expo
         curvature_desired = curvature_desired * curvature_max
-        local lateral_acceleration_desired = curvature_desired * speed2
+        local lateral_acceleration_desired = curvature_desired * speed2 / 0.75
+        -- 0.75 is an empirical adjustment factor
 
         local bearing_new = 90 * curvature_direction
         bearing_new = wrap_angle.deg_360(math.deg(state_now.vel_bearing()) + bearing_new)
@@ -155,8 +195,19 @@ local function Guider()
             p3 = lateral_acceleration_desired,
             })
 
-        gcs_send(string.format("spddes %.1f, altdes %.0f, curdes %.3f", 
-            speed_desired, altitude_desired, curvature_desired))
+
+        gcs_send(string.format("spd(d:%.1f, a:%.1f) alt(d:%.1f, a:%.1f), crv(d:%.4f, a:%.4f)",
+            speed_desired, state_now.speed(), altitude_desired, state_now.alt(),
+            curvature_desired, state_now.curvature()))
+
+        ---@diagnostic disable-next-line: param-type-mismatch
+        logger.write("GSAH", "SpdD,SpdA,AktD,AltA,CrvD,CrvA", "ffffff", speed_desired, state_now.speed(), altitude_desired, 
+            state_now.alt(), curvature_desired, state_now.curvature())
+
+        state_last = state_now
+        -- Have to release the reference to state_last. Otherwise none of the state objects 
+        -- are freed and their memmory collected.
+        state_last.clear_last()
 
         return true
     end
