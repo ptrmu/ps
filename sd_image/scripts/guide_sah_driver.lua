@@ -29,7 +29,7 @@ end
 
 local speed_slider = find_channel(301, "speed")
 local altitude_slider = find_channel(302, "altitude")
-local curvature_slider = find_channel(303, "curvature")
+local curvature_slider = find_channel(301, "curvature")
 if not speed_slider or not altitude_slider or not curvature_slider then
     return nil, 0
 end
@@ -42,70 +42,94 @@ end
 -- Calculate a max curvature that is reasonable for a speed of 25 mps
 local lateral_acceleration_max = 9.8 * math.atan(math.rad(roll_limit_deg))
 
-local function StateCurrent(state_start, state_last)
+local function make_class()
+    local cls = {}
+    cls.__index = cls
+    return cls
+end
+local _StateCurrentClass = make_class()
 
-    if state_last and state_last.state_start() ~= state_start then
-        gcs_send("Error: tate_last.state_start() ~= state_start .")
+local function StateCurrent(state_start_arg, state_last_arg)
+
+    if state_last_arg and state_last_arg:state_start() ~= state_start_arg then
+        gcs_send("Error: state_last:state_start() ~= state_start.")
         return nil
     end
 
-    local loc_cur = ahrs:get_location()
-    local vel_cur_vmps = ahrs:get_velocity_NED()
-    if not loc_cur or not vel_cur_vmps then
+    -- local _self = {
+    --     _state_start = state_start_arg,
+    --     _state_last = state_last_arg,
+    -- }
+
+    local _self = setmetatable({
+        _state_start = state_start_arg,
+        _state_last = state_last_arg,
+        }, _StateCurrentClass)
+
+    _self.loc_cur = ahrs:get_location()
+    _self.vel_cur_vmps = ahrs:get_velocity_NED()
+    if not _self.loc_cur or not _self.vel_cur_vmps then
         gcs_send("Error: cannot get location.")
         return nil
     end
-    loc_cur:change_alt_frame(1)
+    _self.loc_cur:change_alt_frame(1)
 
-    local vel_cur_2mps = Vector2f()
-    vel_cur_2mps:x(vel_cur_vmps:x())
-    vel_cur_2mps:y(vel_cur_vmps:y())
+    _self.vel_cur_2mps = Vector2f()
+    _self.vel_cur_2mps:x(_self.vel_cur_vmps:x())
+    _self.vel_cur_2mps:y(_self.vel_cur_vmps:y())
 
-    local time_cur = millis():tofloat() * 0.001
+    _self.time_cur = millis():tofloat() * 0.001
 
-    local function vel_bearing()
-        return vel_cur_2mps:angle()
+    function _StateCurrentClass.vel_bearing(self)
+        return self.vel_cur_2mps:angle()
     end
 
-    local function speed()
-        return vel_cur_2mps:length()
+    function _StateCurrentClass.speed(self)
+        return self.vel_cur_2mps:length()
     end
 
-    local function time()
-        return time_cur
+    function _StateCurrentClass.time(self)
+        return self.time_cur
     end
 
-    local function time_delta()
-        return time() - state_last.time()
+    function _StateCurrentClass.time_delta(self)
+        return self:time() - self._state_last:time()
     end
 
-    local function speed_avg()
-        return (speed() + state_last.speed()) / 2
+    function _StateCurrentClass.speed_avg(self)
+        return (self:speed() + self._state_last:speed()) / 2
     end
 
-    local function curvature()
-        local time_delta_tmp = time_delta()
+    function _StateCurrentClass.curvature(self)
+        local time_delta_tmp = self:time_delta()
         if time_delta_tmp == 0 then
             return 0
         end
-        return wrap_angle.rad_pi(vel_bearing() - state_last.vel_bearing()) / time_delta_tmp / speed_avg()
+        return wrap_angle.rad_pi(self:vel_bearing() - self._state_last:vel_bearing()) / time_delta_tmp / self:speed_avg()
     end
 
-    return {
-        vel_bearing = vel_bearing,
-        speed = speed,
-        time = time,
-        loc = function() return loc_cur:copy() end,
-        alt = function() return loc_cur:alt() * 0.01 end,
+    function _StateCurrentClass.loc(self) return self.loc_cur:copy() end
+    function _StateCurrentClass.alt(self) return self.loc_cur:alt() * 0.01 end
+    function _StateCurrentClass.clear_last(self) self._state_last = nil end
+    function _StateCurrentClass.state_start(self) return self._state_start end
+    function _StateCurrentClass.time_total(self) return self.time_cur - self._state_start:time() end
 
-        time_delta = time_delta,
-        speed_avg = speed_avg,
-        curvature = curvature,
-        clear_last = function() state_last = nil end,
+    return _self
+    -- return {
+    --     vel_bearing = vel_bearing,
+    --     speed = speed,
+    --     time = time,
+    --     loc = function() return self.loc_cur:copy() end,
+    --     alt = function() return self.loc_cur:alt() * 0.01 end,
 
-        state_start = function() return state_start end,
-        time_total = function() return time_cur - state_start.time() end,
-    }
+    --     time_delta = time_delta,
+    --     speed_avg = speed_avg,
+    --     curvature = curvature,
+    --     clear_last = function() self.state_last = nil end,
+
+    --     state_start = function() return self.state_start end,
+    --     time_total = function() return self.time_cur - self.state_start.time() end,
+    -- }
 end
 
 
@@ -124,6 +148,8 @@ local function Guider()
     local function finish()
         vehicle:set_mode(saved_mode)
     end
+
+    local count = 0
 
     return function(abort)
 
@@ -167,7 +193,7 @@ local function Guider()
             })
 
         -- Set curvature
-        local speed2 = state_now.speed() * state_now.speed()
+        local speed2 = state_now:speed() * state_now:speed()
         local curvature_max = lateral_acceleration_max / speed2
 
         local curvature_input  = curvature_slider:norm_input()
@@ -175,13 +201,15 @@ local function Guider()
         if curvature_input < 0 then
             curvature_direction = -1    -- counter clockwise
         end
-        local curvature_desired = curvature_input * curvature_input  -- add expo
-        curvature_desired = curvature_desired * curvature_max
-        local lateral_acceleration_desired = curvature_direction * curvature_desired * speed2 / 0.75
+        local curvature_desired = curvature_input * curvature_input * curvature_max -- add expo
+
+        -- lateral acceleration is positive because curvature_desired is positive
         -- 0.75 is an empirical adjustment factor
+        local lateral_acceleration_desired = curvature_desired * speed2 / 0.75
+        curvature_desired = curvature_desired * curvature_direction
 
         local bearing_new = 90 * curvature_direction
-        bearing_new = wrap_angle.deg_360(math.deg(state_now.vel_bearing()) + bearing_new)
+        bearing_new = wrap_angle.deg_360(math.deg(state_now:vel_bearing()) + bearing_new)
 
         -- p1 = type (GUIDED_HEADING_NONE=0, GUIDED_HEADING_COG=1, GUIDED_HEADING_HEADING=2)
         -- p2 = heading in degrees
@@ -193,18 +221,19 @@ local function Guider()
             })
 
 
-        gcs_send(string.format("spd(d:%.1f, a:%.1f) alt(d:%.1f, a:%.1f), crv(i:%.2f, d:%.4f, a:%.4f)",
-            speed_desired, state_now.speed(), altitude_desired, state_now.alt(),
-            curvature_input, curvature_desired, state_now.curvature()))
+        count = count + 1
+        gcs_send(string.format("%03i, spd(d:%.1f, a:%.1f) alt(d:%.1f, a:%.1f), crv(i:%.2f, d:%.4f, a:%.4f)",
+            count, speed_desired, state_now:speed(), altitude_desired, state_now:alt(),
+            curvature_input, curvature_desired, state_now:curvature()))
 
         ---@diagnostic disable-next-line: param-type-mismatch
-        logger.write("GSAH", "SpdD,SpdA,AktD,AltA,CrvD,CrvA", "ffffff", speed_desired, state_now.speed(), altitude_desired, 
-            state_now.alt(), curvature_desired, state_now.curvature())
+        logger.write("GSAH", "SpdD,SpdA,AktD,AltA,CrvD,CrvA", "ffffff", speed_desired, state_now:speed(), altitude_desired, 
+            state_now:alt(), curvature_desired, state_now:curvature())
 
         state_last = state_now
         -- Have to release the reference to state_last. Otherwise none of the state objects 
         -- are freed and their memmory collected.
-        state_last.clear_last()
+        -- state_last.clear_last()
 
         return true
     end
