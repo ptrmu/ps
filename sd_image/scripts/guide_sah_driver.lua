@@ -29,15 +29,15 @@ end
 
 local speed_slider = find_channel(301, "speed")
 local altitude_slider = find_channel(302, "altitude")
-local curvature_slider = find_channel(301, "curvature")
+local curvature_slider = find_channel(303, "curvature")
 if not speed_slider or not altitude_slider or not curvature_slider then
-    return
+    return nil, 0
 end
 
 local roll_limit_deg = Parameter("ROLL_LIMIT_DEG"):get()
 if not roll_limit_deg then
     gcs_send("Cound not find parameter ROLL_LIMIT_DEG")
-    return
+    return nil, 0
 end
 -- Calculate a max curvature that is reasonable for a speed of 25 mps
 local lateral_acceleration_max = 9.8 * math.atan(math.rad(roll_limit_deg))
@@ -144,7 +144,6 @@ local function Guider()
 
         -- Set speed
         local speed_desired = ({22, 25, 28})[speed_slider:get_aux_switch_pos()+1]
-        speed_desired = 22
 
         -- p1 = type (SPEED_TYPE_AIRSPEED)
         -- p2 = airspeed
@@ -157,7 +156,6 @@ local function Guider()
 
         -- Set altitude
         local altitude_desired = ({80, 100, 120})[altitude_slider:get_aux_switch_pos()+1]
-        altitude_desired = 120
 
         -- frame = type (MAV_FRAME_GLOBAL_RELATIVE_ALT)
         -- z = altitude 
@@ -172,15 +170,14 @@ local function Guider()
         local speed2 = state_now.speed() * state_now.speed()
         local curvature_max = lateral_acceleration_max / speed2
 
-        local curvature_desired  = curvature_slider:norm_input()
+        local curvature_input  = curvature_slider:norm_input()
         local curvature_direction = 1   -- clockwise
-        if curvature_desired < 0 then
+        if curvature_input < 0 then
             curvature_direction = -1    -- counter clockwise
-            curvature_desired = - curvature_desired
         end
-        curvature_desired = curvature_desired * curvature_desired  -- add expo
+        local curvature_desired = curvature_input * curvature_input  -- add expo
         curvature_desired = curvature_desired * curvature_max
-        local lateral_acceleration_desired = curvature_desired * speed2 / 0.75
+        local lateral_acceleration_desired = curvature_direction * curvature_desired * speed2 / 0.75
         -- 0.75 is an empirical adjustment factor
 
         local bearing_new = 90 * curvature_direction
@@ -196,9 +193,9 @@ local function Guider()
             })
 
 
-        gcs_send(string.format("spd(d:%.1f, a:%.1f) alt(d:%.1f, a:%.1f), crv(d:%.4f, a:%.4f)",
+        gcs_send(string.format("spd(d:%.1f, a:%.1f) alt(d:%.1f, a:%.1f), crv(i:%.2f, d:%.4f, a:%.4f)",
             speed_desired, state_now.speed(), altitude_desired, state_now.alt(),
-            curvature_desired, state_now.curvature()))
+            curvature_input, curvature_desired, state_now.curvature()))
 
         ---@diagnostic disable-next-line: param-type-mismatch
         logger.write("GSAH", "SpdD,SpdA,AktD,AltA,CrvD,CrvA", "ffffff", speed_desired, state_now.speed(), altitude_desired, 
