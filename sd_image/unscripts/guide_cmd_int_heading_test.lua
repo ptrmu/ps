@@ -18,17 +18,16 @@ local SPEED_TYPE_AIRSPEED = 0
 local MAV_MODE_FLAG_CUSTOM_MODE_ENABLED = 1
 
 
-local angle_slider = rc:find_channel_for_option(301)
+local speed_slider = rc:find_channel_for_option(302)
+local altitude_slider = rc:find_channel_for_option(303)
+local curvature_slider = rc:find_channel_for_option(304)
+if not speed_slider or not altitude_slider or not curvature_slider then
+    gcs_send("Error: no RC channels set up enabling or selecting angle")
+    return
+end
 
 
 local function Guider()
-
-    local MAX_GUIDE_ANGLE_D = 50.0
-
-    if not angle_slider then
-        gcs_send("Error: no RC channels set up enabling or selecting angle")
-        return nil
-    end
 
 
     local loc_start = ahrs:get_location()
