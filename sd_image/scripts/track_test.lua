@@ -1,9 +1,6 @@
 local gcs_send = require("gcs_send_funcfactory")("TTR")
 local wrap_angle = require("wrap_angle_obj")
-local switch_exec_updatefactory = require("switch_exec_updatefactory")
 local track = require("track_obj")
-
-local GUIDING_TIME_MS = 98
 
 local TrackSpot = track.TrackSpot
 local TrackArc = track.TrackArc
@@ -89,15 +86,7 @@ local function test_T()
     return 0
 end
 
-local function Tester()
-    return nil
-end
+gcs_send(string.format("Loaded track_test.lua %i, %i", 1, test_T()))
 
+return nil, 0
 
-return (function()
-    local r, d = switch_exec_updatefactory("track_test.lua", Tester, GUIDING_TIME_MS, 300, gcs_send)
-
-    gcs_send(string.format("Loaded track_test.lua %i, %i", 1, test_T()))
-
-    return r, d
-end)()
