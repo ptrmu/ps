@@ -113,7 +113,7 @@ local function Guider()
         local rot_rate_c_dps = math.deg(vel_delta_bearing) / time_delta
 
         -- Determine the parameteers.
-        local acc = angle_slider:norm_input() * 10
+        local acc = curvature_slider:norm_input() * 10
         local new_bearing = 90
         if acc < 0 then
             new_bearing = -new_bearing

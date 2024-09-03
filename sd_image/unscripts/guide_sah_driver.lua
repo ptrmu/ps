@@ -209,7 +209,7 @@ local function Guider()
         state_last = state_now
         -- Have to release the reference to state_last. Otherwise none of the state objects 
         -- are freed and their memmory collected.
-        -- state_last:clear_last()
+        state_last:clear_last()
 
         return true
     end

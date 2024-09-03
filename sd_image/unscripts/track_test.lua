@@ -1,6 +1,6 @@
 local gcs_send = require("gcs_send_funcfactory")("TTR")
 local wrap_angle = require("wrap_angle_obj")
-local track = require("track_obj")
+local track = require("track_obj")(gcs_send, wrap_angle)
 
 local TrackSpot = track.TrackSpot
 local TrackArc = track.TrackArc
@@ -86,7 +86,10 @@ local function test_T()
     return 0
 end
 
-gcs_send(string.format("Loaded track_test.lua %i, %i", 1, test_T()))
+gcs_send(string.format("Loaded track_test.lua %i, %i", test_TA(), 1))
 
-return nil, 0
+local function do_nothing()
+    return do_nothing, 1000
+end
+return do_nothing()
 
