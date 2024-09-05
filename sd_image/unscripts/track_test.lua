@@ -42,7 +42,7 @@ local function test_TA()
     local function x_test(ta, arc_start, size_scale, s_scale, s_start, expected)
         test_idx = test_idx + 1
         ta:set_transform(arc_start, size_scale, s_scale, s_start)
-        local actual = ta:along_arc(ta:s() * size_scale * s_scale + s_start)
+        local actual = ta:along_arc(ta:s() * size_scale / s_scale + s_start)
         local str = string.format("%i Test(s:%.2f, k:%.2f) ", test_idx, ta:s(), ta:k())
         if not compare(str, expected, actual) then
             success = 0
@@ -116,16 +116,26 @@ local function test_T()
     trk_test(TrackSpot(0, 1, 0), 1, 1, 0, end_s, TrackSpot(end_n, end_e + 1, end_theta))
     trk_test(TrackSpot(0, 0, pid2), 1, 1, 0, end_s, TrackSpot(-end_e, end_n, wrap_angle.rad_pi(end_theta + pid2)))
     trk_test(TrackSpot(0, 0, 0), 2, 1, 0, end_s * 2, TrackSpot(end_n * 2, end_e * 2, end_theta))
-    trk_test(TrackSpot(0, 0, 0), 1, 25, 0, end_s * 25, TrackSpot(end_n, end_e, end_theta))
+    trk_test(TrackSpot(0, 0, 0), 1, 25, 0, end_s / 25, TrackSpot(end_n, end_e, end_theta))
+    trk_test(TrackSpot(0, 0, 0), 2, 25, 0, end_s / 25 * 2, TrackSpot(end_n * 2, end_e * 2, end_theta))
     trk_test(TrackSpot(0, 0, 0), 1, 1, 1, end_s + 1, TrackSpot(end_n, end_e, end_theta))
 
     return success
 end
 
-gcs_send(string.format("Loaded track_test.lua %i, %i", test_TA(), test_T()))
+gcs_send(string.format("Loaded track_test.lua %i, %i", 1, 1))
 
 local function do_nothing()
     return do_nothing, 1000
 end
-return do_nothing()
+local function do_test_T()
+    gcs_send(string.format("test_T() %i", test_T()))
+    return do_nothing, 1000
+end
+local function do_test_TA()
+    gcs_send(string.format("test_TA() %i", test_TA()))
+    return do_test_T, 1000
+end
+return do_test_TA, 1000
+
 

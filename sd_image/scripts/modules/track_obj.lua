@@ -87,9 +87,10 @@ local function define_classes(gcs_send, wrap_angle)
 
 
         function cls.along_arc(self, s)
-            local s_from_origin = (s - self.s0_scaled) / (self.size_scale  * self.s_scale)
+            local s_from_origin = (s - self.s0_scaled) * self.s_scale / self.size_scale
             local k_from_origin = self[IDX_K]
             local p = along_arc_from_origin(s_from_origin, k_from_origin)
+            -- gcs_send(string.format("n:%f, e:%f", p:n(), p:e()))
             return scale_spot(self, p)
         end
 
@@ -109,7 +110,7 @@ local function define_classes(gcs_send, wrap_angle)
         function cls.s(self) return self[IDX_S] end
         function cls.k(self) return self[IDX_K] end
         function cls.arc_start_s_scaled(self) return self.s0_scaled end
-        function cls.arc_end_s_scaled(self) return self[IDX_S] * self.size_scale * self.s_scale + self.s0_scaled end
+        function cls.arc_end_s_scaled(self) return self[IDX_S] * self.size_scale / self.s_scale + self.s0_scaled end
         function cls.arc_end_spot(self) return scale_spot(self, along_arc_from_origin(self[IDX_S], self[IDX_K])) end
 
         return new

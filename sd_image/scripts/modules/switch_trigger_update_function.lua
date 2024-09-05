@@ -20,7 +20,7 @@ local function define_classes(gcs_send)
             if not arming:is_armed() then
                 return false
             end
-            return (go_switch:get_aux_switch_pos() == 2) == switch_true
+            return (go_switch:get_aux_switch_pos() > 0) == switch_true
         end
 
         local function goto_not_ready()

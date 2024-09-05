@@ -8,11 +8,15 @@ local GUIDING_TIME_MS   = 300
 
 local PLANE_MODE_GUIDED = 15
 
+local MAV_CMD_DO_SET_MODE = 176
 local MAV_CMD_GUIDED_CHANGE_SPEED = 43000
 local MAV_CMD_GUIDED_CHANGE_ALTITUDE = 43001
 local MAV_CMD_GUIDED_CHANGE_HEADING = 43002
 
-local HEADING_TYPE_COURSE_OVER_GROUND = 0
+local MODE_GUIDED = 15
+
+local MAV_MODE_FLAG_CUSTOM_MODE_ENABLED = 1
+
 local HEADING_TYPE_HEADING = 1
 local SPEED_TYPE_AIRSPEED = 0
 local MAV_MODE_FLAG_CUSTOM_MODE_ENABLED = 1
@@ -181,18 +185,22 @@ local function Guider()
 
     local saved_mode = vehicle:get_mode()
     vehicle:set_mode(PLANE_MODE_GUIDED)
+    -- gcs:run_command_int(MAV_CMD_DO_SET_MODE, { p1 = MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, p2 = MODE_GUIDED })
 
     local function finish()
         vehicle:set_mode(saved_mode)
     end
+
+    local pi_controller = PI_controller(.5, 0, 1, -4, 4)
 
     local this_track = track.Track{{1, 0}}
     this_track:dump()
     local spot_start = TrackSpot_from_StateCurrent(state_start)
     this_track:set_transform(spot_start, 100, 25, 0)
 
-    local test_heading = math.deg(state_start:vel_bearing())
+    local test_heading = math.deg(wrap_angle.rad_2pi(state_start:vel_bearing()))
     gcs_send(string.format("ber:%0f", test_heading))
+    
     return function(abort)
 
         if abort then
@@ -208,15 +216,27 @@ local function Guider()
 
         local t = state_now:time_total()
         local spot_now = this_track:along_track(t)
-        local dist = distance_from_spot(state_now, spot_now)
+        local dist_now = distance_from_spot(state_now, spot_now)
 
+        -- calculate speed error based on position
+        -- project to target location
+        local dist_projected = 50
+        local spot_targ = track.TrackSpot(
+            dist_projected * math.cos(spot_now:theta()) + spot_now:n(),
+            dist_projected * math.sin(spot_now:theta()) + spot_now:e(),
+            spot_now:theta())
+        local dist_targ = distance_from_spot(state_now, spot_targ)
+        local error = dist_targ - dist_projected
+
+        local u = pi_controller.update(0, error)
+        local speed_desired = 25 - u
 
         -- p1 = type (SPEED_TYPE_AIRSPEED)
         -- p2 = airspeed
         -- p3 = max airspeed accel
         gcs:run_command_int(MAV_CMD_GUIDED_CHANGE_SPEED, {
             p1 = SPEED_TYPE_AIRSPEED,
-            p2 = 25.5,
+            p2 = speed_desired,
             p3 = 20,
             })
 
@@ -233,14 +253,15 @@ local function Guider()
         -- p2 = heading in degrees
         -- p3 = max accel
         gcs:run_command_int(MAV_CMD_GUIDED_CHANGE_HEADING, {
-            p1 = HEADING_TYPE_COURSE_OVER_GROUND,
+            p1 = HEADING_TYPE_HEADING,
             p2 = test_heading,
             p3 = 10,
             })
 
 
-        gcs_send(string.format("t:%.2f, d:%.0f, t(%.0f, %.0f), a(%.0f, %.0f)", t, dist,
-            spot_now:n(), spot_now:e(), state_now.distance_NE:x(), state_now.distance_NE:y()))
+        gcs_send(string.format("t:%.2f, d:%.0f, t(%.0f, %.0f), a(%.0f, %.0f), e(%.1f, %.2f) ", t, dist_now,
+            spot_now:n(), spot_now:e(), state_now.distance_NE:x(), state_now.distance_NE:y(),
+            error, speed_desired))
 
         state_last = state_now
         -- Have to release the reference to state_last. Otherwise none of the state objects 
