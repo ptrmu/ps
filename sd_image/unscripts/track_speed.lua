@@ -2,7 +2,7 @@ local gcs_send          = require("gcs_send_funcfactory")("TTR")
 local wrap_angle        = require("wrap_angle_obj")
 local stuf              = require("switch_trigger_update_function")(gcs_send)
 local track             = require("track_obj")(gcs_send, wrap_angle)
-local StateCurrent      = require("ahrs_state")(gcs_send).StateCurrent
+local StateCurrent      = require("ahrs_state")(gcs_send, wrap_angle).StateCurrent
 
 local GUIDING_TIME_MS   = 300
 
@@ -191,7 +191,7 @@ local function Guider()
         vehicle:set_mode(saved_mode)
     end
 
-    local pi_controller = PI_controller(.5, 0, 1, -4, 4)
+    local pi_controller = PI_controller(.25, .025, 4, -4, 4)
 
     local this_track = track.Track{{1, 0}}
     this_track:dump()
@@ -216,20 +216,34 @@ local function Guider()
 
         local t = state_now:time_total()
         local spot_now = this_track:along_track(t)
-        local dist_now = distance_from_spot(state_now, spot_now)
+        -- dist_now - distance between target point and now point
+        local dist_error = distance_from_spot(state_now, spot_now)
 
         -- calculate speed error based on position
         -- project to target location
         local dist_projected = 50
-        local spot_targ = track.TrackSpot(
+        local spot_projected = track.TrackSpot(
             dist_projected * math.cos(spot_now:theta()) + spot_now:n(),
             dist_projected * math.sin(spot_now:theta()) + spot_now:e(),
             spot_now:theta())
-        local dist_targ = distance_from_spot(state_now, spot_targ)
-        local error = dist_targ - dist_projected
+        -- dist_targ - distance between projected point and now point
+        local dist_targ = distance_from_spot(state_now, spot_projected)
 
-        local u = pi_controller.update(0, error)
+        -- e, u - the input and output to the PI controller
+        local e = dist_targ - dist_projected
+        local u = pi_controller.update(0, e)
+
+        -- speed_desired - 
         local speed_desired = 25 - u
+        -- dist_spot - distance from start to target spot
+        local dist_spot = distance_from_spot(state_start, spot_now)
+        -- dist_now - distance from start to current 
+        local dist_now = state_now:distance_total()
+        -- bearing_now_error - angle offset from start to now from track
+        local bearing_now_error = wrap_angle.deg_180(math.deg(state_now:bearing_total()) - test_heading)
+
+        -- Calculate Data to log.
+        -- dist_now - distance between target point and now point
 
         -- p1 = type (SPEED_TYPE_AIRSPEED)
         -- p2 = airspeed
@@ -237,7 +251,7 @@ local function Guider()
         gcs:run_command_int(MAV_CMD_GUIDED_CHANGE_SPEED, {
             p1 = SPEED_TYPE_AIRSPEED,
             p2 = speed_desired,
-            p3 = 20,
+            p3 = 1000,
             })
 
         -- frame = type (MAV_FRAME_GLOBAL_RELATIVE_ALT)
@@ -259,9 +273,8 @@ local function Guider()
             })
 
 
-        gcs_send(string.format("t:%.2f, d:%.0f, t(%.0f, %.0f), a(%.0f, %.0f), e(%.1f, %.2f) ", t, dist_now,
-            spot_now:n(), spot_now:e(), state_now.distance_NE:x(), state_now.distance_NE:y(),
-            error, speed_desired))
+        gcs_send(string.format("t:%.2f, d:%.0f, n(%.0f, %.0f), pi(%.2f, %.2f), spd(d:%.1f, a:%.1f) ", t, dist_spot,
+            dist_now, bearing_now_error, e, u, speed_desired, state_now:speed()))
 
         state_last = state_now
         -- Have to release the reference to state_last. Otherwise none of the state objects 

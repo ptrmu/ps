@@ -69,6 +69,8 @@ local function define_classes(gcs_send, wrap_angle)
         function cls.clear_last(self) self[IDX_STATE_LAST] = nil end
         function cls.state_start(self) return self[IDX_STATE_START] end
         function cls.time_total(self) return self.time_cur - self[IDX_STATE_START]:time() end
+        function cls.distance_total(self) return self[IDX_STATE_START]:loc():get_distance(self.loc_cur) end
+        function cls.bearing_total(self) return self[IDX_STATE_START]:loc():get_bearing(self.loc_cur) end
 
         return new
     end
