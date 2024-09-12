@@ -64,7 +64,6 @@ local function Guider()
 
     local count = 0
 
-
     return function(abort)
         if abort then
             finish()
@@ -110,12 +109,12 @@ local function Guider()
         local speed_sq            = state_now:speed() * state_now:speed()
         local curvature_max       = lateral_acceleration_max / speed_sq
 
-        local curvature_input     = -curvature_slider:norm_input()                  -- Get direction correct
-        local curvature_direction = 1                                               -- clockwise
-        local p4                  = 0                                               -- not ccw
+        local curvature_input     = -curvature_slider:norm_input() -- Get direction correct
+        local curvature_direction = 1                              -- clockwise
+        local p4                  = 0
         if curvature_input < 0 then
-            curvature_direction = -1                                                -- counter clockwise
-            p4 = 1                                                                  -- ccw
+            curvature_direction = -1 -- counter clockwise
+            p4 = 1
         end
         local curvature_desired = curvature_input * curvature_input * curvature_max -- add expo
 
@@ -141,18 +140,17 @@ local function Guider()
         if curvature_desired < 0.0001 then
             curvature_desired = 0.0001
         end
-        local radius = 1 / curvature_desired
         local center_bearing = curvature_direction * math.pi / 2
         center_bearing = wrap_angle.rad_2pi(state_now:vel_bearing() + center_bearing)
 
+        local radius = 1 / curvature_desired
+        local radius_scaled = radius / ahrs:get_EAS2TAS() ^ 2
         local center = state_now:loc():copy()
-        center:offset(radius * math.cos(center_bearing), radius * math.sin(center_bearing))
-
-        local center_NE = state_start:loc():get_distance_NE(center)
+        center:offset_bearing(math.deg(center_bearing), radius)
 
         gcs:run_command_int(MAV_CMD_DO_REPOSITION, {
             frame = MAV_FRAME_GLOBAL_RELATIVE_ALT,
-            p3 = radius,
+            p3 = radius_scaled,
             p4 = p4,
             x = center:lat(),
             y = center:lng(),
@@ -160,10 +158,11 @@ local function Guider()
         })
 
 
+        local center_NE = center:get_distance_NE(state_start:loc())
+        local actual_dist = center:get_distance(state_now:loc())
         count = count + 1
-        gcs_send(string.format("%03i, crv(i:%.2f, r:%.0f, p4:%.0f, d:%.4f, a:%.4f), n:%.0f, e:%.0f",
-            count, curvature_input, radius, p4, curvature_desired, state_now:curvature(),
-            center_NE:x(), center_NE:y()))
+        gcs_send(string.format("%03i, crv(i:%.2f, r:%.0f, p4:%.0f, d:%.4f, a:%.4f)",
+            count, curvature_input, radius_scaled, p4, curvature_desired, state_now:curvature()))
         -- gcs_send(string.format("%03i, spd(d:%.1f, a:%.1f) alt(d:%.1f, a:%.1f), crv(i:%.2f, d:%.4f, a:%.4f)",
         --     count, speed_desired, state_now:speed(), altitude_desired, state_now:alt(),
         --     curvature_input, curvature_desired, state_now:curvature()))
