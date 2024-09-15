@@ -1,8 +1,8 @@
 
 
-local function define_classes(gcs_send)
+local function define_classes(name, gcs_send)
 
-    local function SwitchTriggerUpdateFunction(name, func_factory, update_period_ms, switch_code)
+    local function SwitchTriggerUpdateFunction(func_factory, update_period_ms, switch_code)
 
         local go_switch = rc:find_channel_for_option(switch_code)
         if not go_switch then
@@ -72,11 +72,21 @@ local function define_classes(gcs_send)
             return state_not_ready, update_period_ms
         end
 
+        gcs_send(string.format("Loaded %s.lua", name))
         return goto_not_ready()
+    end
+
+    local function UpdateNothing()
+        gcs_send(string.format("Terminating script %s.lua. Script will no longer run.", name))
+        local function update_nothing()
+            return update_nothing, 1000
+        end
+        return update_nothing, 1000
     end
 
     return {
         SwitchTriggerUpdateFunction = SwitchTriggerUpdateFunction,
+        UpdateNothing = UpdateNothing,
     }
 end
 

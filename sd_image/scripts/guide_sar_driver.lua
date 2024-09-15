@@ -1,15 +1,15 @@
-local gcs_send     = require("gcs_send_funcfactory")("TTR")
+local gcs_send     = require("gcs_send_funcfactory")("GSAR")
 local wrap_angle   = require("wrap_angle_obj")
-local stuf         = require("switch_trigger_update_function")("guide_sah_driver", gcs_send)
+local stuf         = require("switch_trigger_update_function")("guide_sar_driver", gcs_send)
 local track        = require("track_obj")(gcs_send, wrap_angle)
 local StateCurrent = require("ahrs_state")(gcs_send, wrap_angle).StateCurrent
 
 
-
-local GUIDING_TIME_MS                   = 200
+local GUIDING_TIME_MS                   = 300
 
 local PLANE_MODE_GUIDED                 = 15
 
+local MAV_CMD_DO_REPOSITION             = 192
 local MAV_CMD_GUIDED_CHANGE_SPEED       = 43000
 local MAV_CMD_GUIDED_CHANGE_ALTITUDE    = 43001
 local MAV_CMD_GUIDED_CHANGE_HEADING     = 43002
@@ -33,17 +33,10 @@ local speed_slider = find_channel(301, "speed")
 local altitude_slider = find_channel(302, "altitude")
 local curvature_slider = find_channel(303, "curvature")
 if not speed_slider or not altitude_slider or not curvature_slider then
-    return nil, 0
+    return stuf.UpdateNothing()
 end
 
-local roll_limit_deg = Parameter("ROLL_LIMIT_DEG"):get()
-if not roll_limit_deg then
-    gcs_send("Cound not find parameter ROLL_LIMIT_DEG")
-    return nil, 0
-end
-
--- Calculate a max curvature that is reasonable for a speed of 25 mps
-local lateral_acceleration_max = 9.8 * math.atan(math.rad(roll_limit_deg))
+local count = 0
 
 local function Guider()
     local state_start = StateCurrent()
@@ -60,9 +53,6 @@ local function Guider()
     local function finish()
         vehicle:set_mode(saved_mode)
     end
-
-    local count = 0
-
 
     return function(abort)
         if abort then
@@ -82,11 +72,11 @@ local function Guider()
         end
 
         -- Set speed
-        local speed_desired = ({ 20, 23, 26 })[speed_slider:get_aux_switch_pos() + 1]
+        local speed_desired       = ({ 14, 16, 18 })[speed_slider:get_aux_switch_pos() + 1]
 
-        -- p1 = type (SPEED_TYPE_AIRSPEED)
-        -- p2 = airspeed
-        -- p3 = max airspeed accel
+        -- -- p1 = type (SPEED_TYPE_AIRSPEED)
+        -- -- p2 = airspeed
+        -- -- p3 = max airspeed accel
         gcs:run_command_int(MAV_CMD_GUIDED_CHANGE_SPEED, {
             p1 = SPEED_TYPE_AIRSPEED,
             p2 = speed_desired,
@@ -94,54 +84,67 @@ local function Guider()
         })
 
         -- Set altitude
-        local altitude_desired = ({ 80, 100, 120 })[altitude_slider:get_aux_switch_pos() + 1]
+        local altitude_desired    = ({ 80, 90, 100 })[altitude_slider:get_aux_switch_pos() + 1]
 
-        -- frame = type (MAV_FRAME_GLOBAL_RELATIVE_ALT)
-        -- z = altitude
-        -- p3 = max accel
+        -- -- frame = type (MAV_FRAME_GLOBAL_RELATIVE_ALT)
+        -- -- z = altitude
+        -- -- p3 = max accel
         gcs:run_command_int(MAV_CMD_GUIDED_CHANGE_ALTITUDE, {
             frame = MAV_FRAME_GLOBAL_RELATIVE_ALT,
             z = altitude_desired,
             p3 = 100,
         })
 
-        -- Set curvature
-        local speed_sq            = state_now:speed() * state_now:speed()
-        local curvature_max       = lateral_acceleration_max / speed_sq
 
-        local curvature_input     = -curvature_slider:norm_input()                  -- Get direction correct
-        local curvature_direction = 1                                               -- clockwise
+        local radius_min = 60
+        local radius_max = 1000
+        local curvature_min = 1 / radius_max
+        local curvature_max = 1 / radius_min
+
+        local curvature_input     = -curvature_slider:norm_input() -- Get direction correct
+        local curvature_direction = 1                              -- clockwise
+        local p4                  = 0
         if curvature_input < 0 then
-            curvature_direction = -1                                                -- counter clockwise
+            curvature_direction = -1 -- counter clockwise
+            p4 = 1
         end
+
+        -- Try to generate a curve by specifying the center of curvature and radius
         local curvature_desired = curvature_input * curvature_input * curvature_max -- add expo
 
-        -- lateral acceleration is positive because curvature_desired is positive
-        -- 0.75 is an empirical adjustment factor
-        local lateral_acceleration_desired = curvature_desired * speed_sq / 0.75
-        curvature_desired = curvature_desired * curvature_direction
+        if curvature_desired < curvature_min then
+            curvature_desired = curvature_min
+        end
+        local center_bearing = curvature_direction * math.pi / 2
+        center_bearing = wrap_angle.rad_2pi(state_now:vel_bearing() + center_bearing)
 
-        local bearing_new = 90 * curvature_direction
-        bearing_new = wrap_angle.deg_360(math.deg(state_now:vel_bearing()) + bearing_new)
+        local radius = 1 / curvature_desired
+        local radius_scaled = radius / ahrs:get_EAS2TAS() ^ 2
+        local center = state_now:loc():copy()
+        center:offset_bearing(math.deg(center_bearing), radius)
 
-        -- p1 = type (GUIDED_HEADING_NONE=0, GUIDED_HEADING_COG=1, GUIDED_HEADING_HEADING=2)
-        -- p2 = heading in degrees
-        -- p3 = max accel
-        gcs:run_command_int(MAV_CMD_GUIDED_CHANGE_HEADING, {
-            p1 = HEADING_TYPE_HEADING,
-            p2 = bearing_new,
-            p3 = lateral_acceleration_desired,
+        gcs:run_command_int(MAV_CMD_DO_REPOSITION, {
+            frame = MAV_FRAME_GLOBAL_RELATIVE_ALT,
+            p3 = radius_scaled,
+            p4 = p4,
+            x = center:lat(),
+            y = center:lng(),
+            z = 100
         })
 
 
+        local center_NE = center:get_distance_NE(state_start:loc())
+        local actual_dist = center:get_distance(state_now:loc())
         count = count + 1
-        gcs_send(string.format("%03i, spd(d:%.1f, a:%.1f) alt(d:%.1f, a:%.1f), crv(i:%.2f, d:%.4f, a:%.4f)",
-            count, speed_desired, state_now:speed(), altitude_desired, state_now:alt(),
-            curvature_input, curvature_desired, state_now:curvature()))
+        gcs_send(string.format("%03i, crv(i:%.2f, r:%.0f, p4:%.0f, d:%.4f, a:%.4f)",
+            count, curvature_input, radius_scaled, p4, curvature_desired, state_now:curvature()))
+        -- gcs_send(string.format("%03i, spd(d:%.1f, a:%.1f) alt(d:%.1f, a:%.1f), crv(i:%.2f, d:%.4f, a:%.4f)",
+        --     count, speed_desired, state_now:speed(), altitude_desired, state_now:alt(),
+        --     curvature_input, curvature_desired, state_now:curvature()))
 
 
         ---@diagnostic disable: param-type-mismatch
-        logger.write("GSAH", "SpdD,SpdA,AltD,AltA,CrvD,CrvA", "ffffff",
+        logger.write("GSAR", "SpdD,SpdA,AktD,AltA,CrvD,CrvA", "ffffff",
             speed_desired, state_now:speed(), altitude_desired,
             state_now:alt(), curvature_desired, state_now:curvature())
         ---@diagnostic enable: param-type-mismatch
@@ -154,7 +157,5 @@ local function Guider()
         return true
     end
 end
-
-gcs_send("Loaded guide_sah_driver.lua")
 
 return stuf.SwitchTriggerUpdateFunction(Guider, GUIDING_TIME_MS, 300)

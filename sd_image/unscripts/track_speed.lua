@@ -1,6 +1,6 @@
 local gcs_send          = require("gcs_send_funcfactory")("TTR")
 local wrap_angle        = require("wrap_angle_obj")
-local stuf              = require("switch_trigger_update_function")(gcs_send)
+local stuf              = require("switch_trigger_update_function")("track_speed", gcs_send)
 local track             = require("track_obj")(gcs_send, wrap_angle)
 local StateCurrent      = require("ahrs_state")(gcs_send, wrap_angle).StateCurrent
 
@@ -287,4 +287,4 @@ end
 
 gcs_send("Loaded track_speed.lua")
 
-return stuf.SwitchTriggerUpdateFunction("track_speed", Guider, GUIDING_TIME_MS, 300)
+return stuf.SwitchTriggerUpdateFunction(Guider, GUIDING_TIME_MS, 300)
