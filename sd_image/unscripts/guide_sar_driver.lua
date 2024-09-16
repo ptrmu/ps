@@ -72,7 +72,10 @@ local function Guider()
         end
 
         -- Set speed
-        local speed_desired       = ({ 14, 16, 18 })[speed_slider:get_aux_switch_pos() + 1]
+        local speed_input   = speed_slider:norm_input()
+        local speed_min     = 12
+        local speed_max     = 20
+        local speed_desired = (speed_input + 1) * (speed_max - speed_min) / 2 + speed_min
 
         -- -- p1 = type (SPEED_TYPE_AIRSPEED)
         -- -- p2 = airspeed
@@ -84,7 +87,7 @@ local function Guider()
         })
 
         -- Set altitude
-        local altitude_desired    = ({ 80, 90, 100 })[altitude_slider:get_aux_switch_pos() + 1]
+        local altitude_desired = ({ 80, 90, 100 })[altitude_slider:get_aux_switch_pos() + 1]
 
         -- -- frame = type (MAV_FRAME_GLOBAL_RELATIVE_ALT)
         -- -- z = altitude
@@ -96,10 +99,10 @@ local function Guider()
         })
 
 
-        local radius_min = 60
-        local radius_max = 1000
-        local curvature_min = 1 / radius_max
-        local curvature_max = 1 / radius_min
+        local radius_min          = 40
+        local radius_max          = 1000
+        local curvature_min       = 1 / radius_max
+        local curvature_max       = 1 / radius_min
 
         local curvature_input     = -curvature_slider:norm_input() -- Get direction correct
         local curvature_direction = 1                              -- clockwise
@@ -136,8 +139,9 @@ local function Guider()
         local center_NE = center:get_distance_NE(state_start:loc())
         local actual_dist = center:get_distance(state_now:loc())
         count = count + 1
-        gcs_send(string.format("%03i, crv(i:%.2f, r:%.0f, p4:%.0f, d:%.4f, a:%.4f)",
-            count, curvature_input, radius_scaled, p4, curvature_desired, state_now:curvature()))
+        gcs_send(string.format("%03i, crv(i:%.2f, r:%.0f, rs:%.0f, p4:%.0f, d:%.4f, a:%.4f)",
+            count, curvature_input, radius, radius_scaled, p4, curvature_desired * curvature_direction,
+            state_now:curvature()))
         -- gcs_send(string.format("%03i, spd(d:%.1f, a:%.1f) alt(d:%.1f, a:%.1f), crv(i:%.2f, d:%.4f, a:%.4f)",
         --     count, speed_desired, state_now:speed(), altitude_desired, state_now:alt(),
         --     curvature_input, curvature_desired, state_now:curvature()))
@@ -146,7 +150,7 @@ local function Guider()
         ---@diagnostic disable: param-type-mismatch
         logger.write("GSAR", "SpdD,SpdA,AktD,AltA,CrvD,CrvA", "ffffff",
             speed_desired, state_now:speed(), altitude_desired,
-            state_now:alt(), curvature_desired, state_now:curvature())
+            state_now:alt(), curvature_desired * curvature_direction, state_now:curvature())
         ---@diagnostic enable: param-type-mismatch
 
         state_last = state_now

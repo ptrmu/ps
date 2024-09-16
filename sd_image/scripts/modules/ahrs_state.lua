@@ -29,6 +29,10 @@ local function define_classes(gcs_send, wrap_angle)
             end
             if not state_last then
                 self[IDX_STATE_LAST] = self
+            else
+                -- Prevent a chain of last objects from using up all of memory
+                -- and thwarting the garbage collector.
+                state_last:clear_last()
             end
 
             self.loc_cur = ahrs:get_location()

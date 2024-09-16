@@ -1,6 +1,6 @@
 local gcs_send          = require("gcs_send_funcfactory")("TTR")
 local wrap_angle        = require("wrap_angle_obj")
-local stuf              = require("switch_trigger_update_function")("track_speed", gcs_send)
+local stuf              = require("switch_trigger_update_function")("track_speed_perp", gcs_send)
 local track             = require("track_obj")(gcs_send, wrap_angle)
 local StateCurrent      = require("ahrs_state")(gcs_send, wrap_angle).StateCurrent
 
@@ -21,6 +21,7 @@ local HEADING_TYPE_HEADING = 1
 local SPEED_TYPE_AIRSPEED = 0
 local MAV_MODE_FLAG_CUSTOM_MODE_ENABLED = 1
 local MAV_FRAME_GLOBAL_RELATIVE_ALT = 3
+
 
 
 -- constrain a value between limits
@@ -167,10 +168,16 @@ local function TrackSpot_from_StateCurrent(state)
     return ts
 end
 
-local function distance_from_spot(state, spot)
+local function distance_to_spot(state, spot)
     local dn = state.distance_NE:x() - spot:n()
     local de = state.distance_NE:y() - spot:e()
     return math.sqrt(dn * dn + de * de)
+end
+
+local function bearing_to_spot(state, spot)
+    local dn = state.distance_NE:x() - spot:n()
+    local de = state.distance_NE:y() - spot:e()
+    return math.atan(de, dn)
 end
 
 local function Guider()
@@ -216,27 +223,19 @@ local function Guider()
 
         local t = state_now:time_total()
         local spot_now = this_track:along_track(t)
-        -- dist_now - distance between target point and now point
-        local dist_error = distance_from_spot(state_now, spot_now)
 
-        -- calculate speed error based on position
-        -- project to target location
-        local dist_projected = 50
-        local spot_projected = track.TrackSpot(
-            dist_projected * math.cos(spot_now:theta()) + spot_now:n(),
-            dist_projected * math.sin(spot_now:theta()) + spot_now:e(),
-            spot_now:theta())
-        -- dist_targ - distance between projected point and now point
-        local dist_targ = distance_from_spot(state_now, spot_projected)
+        local dist_to_spot = distance_to_spot(state_now, spot_now)
+        local bear_to_spot = bearing_to_spot(state_now, spot_now)
 
-        -- e, u - the input and output to the PI controller
-        local e = dist_targ - dist_projected
+        -- The angle between desired heading and vector to spot
+        local alpha = bear_to_spot - spot_now:theta()
+        local e = dist_to_spot * math.cos(alpha)
         local u = pi_controller.update(0, e)
 
         -- speed_desired - 
-        local speed_desired = 25 - u
+        local speed_desired = 25 + u
         -- dist_spot - distance from start to target spot
-        local dist_spot = distance_from_spot(state_start, spot_now)
+        local dist_spot = distance_to_spot(state_start, spot_now)
         -- dist_now - distance from start to current 
         local dist_now = state_now:distance_total()
         -- bearing_now_error - angle offset from start to now from track
@@ -254,15 +253,6 @@ local function Guider()
             p3 = 1000,
             })
 
-        -- frame = type (MAV_FRAME_GLOBAL_RELATIVE_ALT)
-        -- z = altitude 
-        -- p3 = max accel
-        gcs:run_command_int(MAV_CMD_GUIDED_CHANGE_ALTITUDE, {
-            frame = MAV_FRAME_GLOBAL_RELATIVE_ALT,
-            z = 100,
-            p3 = 100,
-            })
-
         -- p1 = type (GUIDED_HEADING_NONE=0, GUIDED_HEADING_COG=1, GUIDED_HEADING_HEADING=2)
         -- p2 = heading in degrees
         -- p3 = max accel
@@ -272,17 +262,13 @@ local function Guider()
             p3 = 10,
             })
 
-
         gcs_send(string.format("t:%.2f, d:%.0f, n(%.0f, %.0f), pi(%.2f, %.2f), spd(d:%.1f, a:%.1f) ", t, dist_spot,
             dist_now, bearing_now_error, e, u, speed_desired, state_now:speed()))
 
         state_last = state_now
-        -- Have to release the reference to state_last. Otherwise none of the state objects 
-        -- are freed and memory is filled.
-        state_last:clear_last()
-
         return true
     end
 end
+
 
 return stuf.SwitchTriggerUpdateFunction(Guider, GUIDING_TIME_MS, 300)
