@@ -26,6 +26,7 @@ local function compare(str, expected, actual)
 end
 
 local function test_TA()
+    gcs_send("Do test_TA()")
     local success = 1
     local test_idx = 0
 
@@ -42,7 +43,7 @@ local function test_TA()
     local function x_test(ta, arc_start, size_scale, s_scale, s_start, expected)
         test_idx = test_idx + 1
         ta:set_transform(arc_start, size_scale, s_scale, s_start)
-        local actual = ta:along_arc(ta:s() * size_scale / s_scale + s_start)
+        local actual = ta:along_arc(ta:s() + s_start)
         local str = string.format("%i Test(s:%.2f, k:%.2f) ", test_idx, ta:s(), ta:k())
         if not compare(str, expected, actual) then
             success = 0
@@ -86,6 +87,7 @@ local function test_TA()
 end
 
 local function test_T()
+    gcs_send("Do test_T()")
     local success = 1
     local test_idx = 0
 
@@ -95,7 +97,7 @@ local function test_T()
         {TrackArc(pi * 2, -0.5)},
         Track{TrackArc(sqrt2, 0)}
     )
-    -- trk:dump()
+
     local end_n = 0
     local end_e = 2 * (1 - 1/sqrt2) - 4
     local end_theta = pi

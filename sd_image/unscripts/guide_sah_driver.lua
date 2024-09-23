@@ -1,7 +1,6 @@
 local gcs_send     = require("gcs_send_funcfactory")("TTR")
 local wrap_angle   = require("wrap_angle_obj")
 local stuf         = require("switch_trigger_update_function")("guide_sah_driver", gcs_send)
-local track        = require("track_obj")(gcs_send, wrap_angle)
 local StateCurrent = require("ahrs_state")(gcs_send, wrap_angle).StateCurrent
 
 
