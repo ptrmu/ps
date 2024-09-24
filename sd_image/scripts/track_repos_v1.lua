@@ -186,8 +186,8 @@ local function PositionControlFactory(radius_min, radius_max)
         local center_bearing = curvature_direction * math.pi / 2
         center_bearing = wrap_angle.rad_2pi(spot_now:theta() + center_bearing)
 
-        local radius = 1 / curvature
-        local radius_scaled = 0.9 * radius / ahrs:get_EAS2TAS() ^ 2
+        local radius = 0.785 / curvature
+        local radius_scaled = radius / ahrs:get_EAS2TAS() ^ 2
         -- local radius_scaled = radius
         local loc_center = Location_from_TrackSpot(state_now, spot_now)
         loc_center:offset_bearing(math.deg(center_bearing), radius)
@@ -201,14 +201,14 @@ local function PositionControlFactory(radius_min, radius_max)
             z = 100
         })
 
-        gcs_send(string.format(
-            "s:%.0f, k:%.4f, arc(%.1f, %.1f) b(%.1f, %.1f), c(%.0f, %.0f) spot(%.1f, %.1f) n(%.0f, %.0f)",
-            arc_now:s(), arc_now:k(),
-            p_spot_n(arc_now:start_spot()), p_spot_e(arc_now:start_spot()),
-            math.deg(spot_now:theta()), math.deg(center_bearing),
-            p_loc_n(loc_center), p_loc_e(loc_center),
-            p_spot_n(spot_now), p_spot_e(spot_now),
-            p_loc_n(state_now:loc()), p_loc_e(state_now:loc())))
+        -- gcs_send(string.format(
+        --     "s:%.0f, k:%.4f, arc(%.1f, %.1f) b(%.1f, %.1f), c(%.0f, %.0f) spot(%.1f, %.1f) n(%.0f, %.0f)",
+        --     arc_now:s(), arc_now:k(),
+        --     p_spot_n(arc_now:start_spot()), p_spot_e(arc_now:start_spot()),
+        --     math.deg(spot_now:theta()), math.deg(center_bearing),
+        --     p_loc_n(loc_center), p_loc_e(loc_center),
+        --     p_spot_n(spot_now), p_spot_e(spot_now),
+        --     p_loc_n(state_now:loc()), p_loc_e(state_now:loc())))
     end
 
     return position_control
@@ -237,6 +237,12 @@ local function SpeedControlFactory()
             p2 = speed_desired,
             p3 = 1000,
         })
+
+        gcs_send(string.format(
+            "el:%.1f, et:%.1f, spot(%.1f, %.1f) n(%.0f, %.0f)",
+            e, dist_to_spot * math.cos(alpha),
+            p_spot_n(spot_now), p_spot_e(spot_now),
+            p_loc_n(state_now:loc()), p_loc_e(state_now:loc())))
     end
 
     return speed_control
@@ -265,16 +271,16 @@ local function Guider()
         vehicle:set_mode(saved_mode)
     end
 
-    -- local figure_8 = track.BuildFigureEightFactory(4)
-    -- local this_track = track.Track(figure_8, figure_8, figure_8, figure_8)
+    local figure_8 = track.BuildFigureEightFactory(3)
+    local this_track = track.Track(figure_8, figure_8, figure_8, figure_8)
     -- local track_line = track.Track({ { 1, 0 } })
     -- local this_track = track.Track(track_line, track_line, track_line, track_line)
     -- local track_circle = track.Track({ { 2 * math.pi, 1 } })
     -- local this_track = track.Track(track_circle, track_circle, track_circle, track_circle)
-    local track_2circle = track.Track({ { 2 * math.pi, 1 }, { 2 * math.pi, -1 } })
-    local this_track = track.Track(track_2circle, track_2circle, track_2circle, track_2circle)
+    -- local track_2circle = track.Track({ { 2 * math.pi, 1 }, { 2 * math.pi, -1 } })
+    -- local this_track = track.Track(track_2circle, track_2circle, track_2circle, track_2circle)
     local spot_home = track.TrackSpot(0, 0, 0)
-    this_track:set_transform(spot_home, 100, 25, 0)
+    this_track:set_transform(spot_home, 200, 25, 0)
 
     local position_control = PositionControlFactory(40, 1000)
     local speed_control = SpeedControlFactory()

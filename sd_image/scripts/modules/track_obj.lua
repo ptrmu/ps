@@ -115,17 +115,12 @@ local function define_classes(gcs_send, wrap_angle)
 
         cls.s = function(self) return self[IDX_S] * self.size_scale / self.s_scale end
         cls.k = function(self) return self[IDX_K] / self.size_scale end
-        function cls.s_raw(self) return self[IDX_S] end
-
-        function cls.k_raw(self) return self[IDX_K] end
-
-        function cls.start_s(self) return self.s0_scaled end
-
-        function cls.end_s(self) return self:s() + self.s0_scaled end
-
-        function cls.start_spot(self) return self:along_arc(self:start_s()) end
-
-        function cls.end_spot(self) return self:along_arc(self:end_s()) end
+        cls.s_raw = function(self) return self[IDX_S] end
+        cls.k_raw = function(self) return self[IDX_K] end
+        cls.start_s = function(self) return self.s0_scaled end
+        cls.end_s = function(self) return self:s() + self.s0_scaled end
+        cls.start_spot = function(self) return self:along_arc(self:start_s()) end
+        cls.end_spot = function(self) return self:along_arc(self:end_s()) end
 
         return new
     end
@@ -230,10 +225,10 @@ local function define_classes(gcs_send, wrap_angle)
             if length < 2 then
                 length = 2
             end
-            local beta = math.asin(1 / (length - 1))
+            local beta = math.acos(1 / (length - 1))
             local s1 = (math.pi - beta) / 2
             local k1 = 2
-            local s2 = (length - 1) * math.cos(beta)
+            local s2 = (length - 1) * math.sin(beta)
             local k2 = 0
 
             return TrackFactory({
