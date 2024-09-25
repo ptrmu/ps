@@ -1,6 +1,6 @@
 local gcs_send                          = require("gcs_send_funcfactory")("TTR")
 local wrap_angle                        = require("wrap_angle_obj")
-local stuf                              = require("switch_trigger_update_function")("track_repos_v1", gcs_send)
+local stuf                              = require("switch_trigger_update_function")("track_repos_v2", gcs_send)
 local track                             = require("track_obj")(gcs_send, wrap_angle)
 local ahrs_state                        = require("ahrs_state")(gcs_send, wrap_angle)
 local StateCurrent                      = ahrs_state.StateCurrent
@@ -23,6 +23,22 @@ local SPEED_TYPE_AIRSPEED               = 0
 local MAV_MODE_FLAG_CUSTOM_MODE_ENABLED = 1
 local MAV_FRAME_GLOBAL_RELATIVE_ALT     = 3
 
+local params = {
+    spd = {
+        min = 10,
+        mid = 15,
+        max = 20,
+        pi_kP = .25,
+        pi_kI = .025,
+        pi_iMax = 4,
+        pi_min = -4,
+        pi_max = 4,
+    },
+    pos = {
+        radius_min = 40,
+        radius_max = 1000,
+    },
+}
 
 local p_loc_n = function(loc) return 0 end
 local p_loc_e = function(loc) return 0 end
@@ -214,8 +230,8 @@ local function PositionControlFactory(radius_min, radius_max)
     return position_control
 end
 
-local function SpeedControlFactory()
-    local pi_controller = PI_controller(.25, .025, 4, -4, 4)
+local function SpeedControlFactory(kP, kI, iMax, spd_min, spd_mid, spd_max)
+    local pi_controller = PI_controller(kP, kI, iMax, spd_min - spd_mid, spd_max - spd_mid)
 
     local function speed_control(state_now, spot_now)
         local dist_to_spot = distance_to_spot(state_now, spot_now)
@@ -227,7 +243,7 @@ local function SpeedControlFactory()
         local u = pi_controller.update(0, e)
 
         -- speed_desired -
-        local speed_desired = 25 + u
+        local speed_desired = spd_mid + u
 
         -- p1 = type (SPEED_TYPE_AIRSPEED)
         -- p2 = airspeed
@@ -240,7 +256,7 @@ local function SpeedControlFactory()
 
         gcs_send(string.format(
             "el:%.1f, et:%.1f, spot(%.1f, %.1f) n(%.0f, %.0f)",
-            e, dist_to_spot * math.cos(alpha),
+            e, dist_to_spot * math.sin(alpha),
             p_spot_n(spot_now), p_spot_e(spot_now),
             p_loc_n(state_now:loc()), p_loc_e(state_now:loc())))
     end
@@ -279,11 +295,15 @@ local function Guider()
     -- local this_track = track.Track(track_circle, track_circle, track_circle, track_circle)
     -- local track_2circle = track.Track({ { 2 * math.pi, 1 }, { 2 * math.pi, -1 } })
     -- local this_track = track.Track(track_2circle, track_2circle, track_2circle, track_2circle)
-    local spot_home = track.TrackSpot(0, 0, 0)
-    this_track:set_transform(spot_home, 200, 25, 0)
+    local spot_home = track.TrackSpot(0, 0, math.pi * 0.2)
+    this_track:set_transform(spot_home, 100, params.spd.mid, 0)
 
-    local position_control = PositionControlFactory(40, 1000)
-    local speed_control = SpeedControlFactory()
+    local position_control = PositionControlFactory(
+        params.pos.radius_min, params.pos.radius_max)
+
+    local speed_control = SpeedControlFactory(
+        params.spd.pi_kP, params.spd.pi_kI, params.spd.pi_iMax,
+        params.spd.min, params.spd.mid, params.spd.max)
 
     gcs_send(string.format("Home:%i, %i", p_loc_n(loc_home), p_loc_e(loc_home)))
 
