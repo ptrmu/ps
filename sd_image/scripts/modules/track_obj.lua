@@ -203,6 +203,10 @@ local function define_classes(gcs_send, wrap_angle)
                 s >= self[self.arc_idx_cached]:end_s()
         end
 
+        cls.end_s = function(self)
+            return self[#self]:end_s()
+        end
+
         function cls.dump(self)
             for i, arc in ipairs(self) do
                 gcs_send(string.format("i: %i, %.4f, %.4f, %.1f", i,

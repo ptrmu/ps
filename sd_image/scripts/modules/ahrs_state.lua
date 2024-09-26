@@ -97,38 +97,40 @@ local function define_classes(gcs_send, wrap_angle)
 
         local IDX_LOC = 1
         local IDX_LOC_ORIGIN = 2
-        local IDX_STATE_START = 3
-        local IDX_STATE_LAST = 4
+        local IDX_STATE_LAST = 3
 
-        local function new(loc, velocity_NED, state_last, loc_origin)
+        local function new(state_last, loc_origin)
             if state_last then
                 loc_origin = state_last:loc_origin()
             end
 
-            if not loc_origin or not loc or not velocity_NED then
+            if not loc_origin then
                 gcs_send("StateClass arg error.")
                 return nil
             end
 
+            local loc = ahrs:get_location()
+            local velocity_NED = ahrs:get_velocity_NED()
+            if not loc or not velocity_NED then
+                gcs_send("StateClass: cannot get location.")
+                return nil
+            end
+    
             local vel_cur_2mps = Vector2f()
             vel_cur_2mps:x(velocity_NED:x())
             vel_cur_2mps:y(velocity_NED:y())
 
             local self = setmetatable({
-                loc:copy(),
+                loc,
                 loc_origin,
-                state_last,
                 state_last,
                 vel_cur_2mps = vel_cur_2mps,
                 distance_NE = loc_origin:get_distance_NE(loc),
-                time_cur = millis():tofloat() * 0.001,
             }, cls)
 
             if not state_last then
-                self[IDX_STATE_START] = self
                 self[IDX_STATE_LAST] = self
             else
-                self[IDX_STATE_START] = state_last[IDX_STATE_START]
                 -- Prevent a chain of last objects from using up all of memory
                 -- and thwarting the garbage collector.
                 state_last[IDX_STATE_LAST] = nil
@@ -150,14 +152,9 @@ local function define_classes(gcs_send, wrap_angle)
 
         cls.vel_bearing = function(self) return self.vel_cur_2mps:angle() end
         cls.speed = function(self) return self.vel_cur_2mps:length() end
-        cls.time = function(self) return self.time_cur end
-        cls.time_delta = function(self) return self:time() - self[IDX_STATE_LAST]:time() end
         cls.speed_avg = function(self) return (self:speed() + self[IDX_STATE_LAST]:speed()) / 2 end
         cls.loc = function(self) return self[IDX_LOC] end
         cls.loc_origin = function(self) return self[IDX_LOC_ORIGIN] end
-        cls.time_total = function(self) return self.time_cur - self[IDX_STATE_START]:time() end
-        cls.distance_total = function(self) return self[IDX_STATE_START]:loc():get_distance(self.loc) end
-        cls.bearing_total = function(self) return self[IDX_STATE_START]:loc():get_bearing(self.loc) end
 
         return new
     end
@@ -169,33 +166,21 @@ local function define_classes(gcs_send, wrap_angle)
             gcs_send("StateCurrentFactory: arg error.")
             return nil
         end
-        local loc = ahrs:get_location()
-        local velocity_NED = ahrs:get_velocity_NED()
-        if not loc or not velocity_NED then
-            gcs_send("StateCurrentFactory: cannot get location.")
-            return nil
-        end
-        return StateClassFactory(loc, velocity_NED, state_last)
+        return StateClassFactory(state_last)
     end
 
-    local StateStartFactory = function(loc_origin)
+    local StateLastFactory = function(loc_origin)
         if not loc_origin then
-            gcs_send("StateStartFactory arg error.")
+            gcs_send("StateLastFactory arg error.")
             return nil
         end
-        local loc = ahrs:get_location()
-        local velocity_NED = ahrs:get_velocity_NED()
-        if not loc or not velocity_NED then
-            gcs_send("StateStartFactory: cannot get location.")
-            return nil
-        end
-        return StateClassFactory(loc, velocity_NED, nil, loc_origin)
+        return StateClassFactory(nil, loc_origin)
     end
 
     return {
         StateCurrent = StateCurrentClass(),
         StateCurrentFactory = StateCurrentFactory,
-        StateStartFactory = StateStartFactory,
+        StateLastFactory = StateLastFactory,
     }
 end
 

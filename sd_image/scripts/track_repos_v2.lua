@@ -5,7 +5,7 @@ local track                             = require("track_obj")(gcs_send, wrap_an
 local ahrs_state                        = require("ahrs_state")(gcs_send, wrap_angle)
 local StateCurrent                      = ahrs_state.StateCurrent
 
-local GUIDING_TIME_MS                   = 300
+local GUIDING_TIME_MS                   = 100
 
 local PLANE_MODE_GUIDED                 = 15
 
@@ -16,14 +16,16 @@ local MAV_CMD_GUIDED_CHANGE_HEADING     = 43002
 
 local MODE_GUIDED                       = 15
 
-local MAV_MODE_FLAG_CUSTOM_MODE_ENABLED = 1
-
 local HEADING_TYPE_HEADING              = 1
 local SPEED_TYPE_AIRSPEED               = 0
 local MAV_MODE_FLAG_CUSTOM_MODE_ENABLED = 1
 local MAV_FRAME_GLOBAL_RELATIVE_ALT     = 3
 
-local params = {
+local params                            = {
+    tim = {
+        update_ms = GUIDING_TIME_MS,
+        update_skip_max = 2,
+    },
     spd = {
         min = 10,
         mid = 15,
@@ -38,30 +40,27 @@ local params = {
         radius_min = 40,
         radius_max = 1000,
     },
+    alt = {
+        target = 80,
+    },
 }
 
-local p_loc_n = function(loc) return 0 end
-local p_loc_e = function(loc) return 0 end
-local p_spot_n = function(spot) return 0 end
-local p_spot_e = function(spot) return 0 end
+local p_loc_n                           = function(loc) return 0 end
+local p_loc_e                           = function(loc) return 0 end
+local p_spot_n                          = function(spot) return 0 end
+local p_spot_e                          = function(spot) return 0 end
+local p_loc_lat                         = function(loc) return 0 end
+local p_loc_lng                         = function(loc) return 0 end
 
-local function p_setup(state_start, loc_origin)
-    local function get_loc(spot)
-        local loc = state_start:loc():copy()
-        loc:offset(-spot:n(), -spot:e())
-        return loc
-    end
+local function p_setup(loc_origin)
+    local lat_origin = loc_origin:lat()
+    local lng_origin = loc_origin:lng()
     p_loc_n = function(loc) return loc_origin:get_distance_NE(loc):x() end
     p_loc_e = function(loc) return loc_origin:get_distance_NE(loc):y() end
     p_spot_n = function(spot) return spot:n() end
     p_spot_e = function(spot) return spot:e() end
-end
-
-local function p_lat(lat)
-    return lat - -353632620
-end
-local function p_lng(lng)
-    return lng - 1491652372
+    p_loc_lat = function(loc) return loc:lat() - lat_origin end
+    p_loc_lng = function(loc) return loc:lng() - lng_origin end
 end
 
 
@@ -75,7 +74,6 @@ local function constrain(v, vmin, vmax)
     end
     return v
 end
-
 
 -- a PI controller implemented as a Lua object
 local function PI_controller(kP, kI, iMax, min, max)
@@ -182,7 +180,7 @@ local function PositionControlFactory(radius_min, radius_max)
     local curvature_min = 1 / radius_max
     local curvature_max = 1 / radius_min
 
-    local function position_control(state_now, arc_now, spot_now)
+    return function(state_now, arc_now, spot_now)
         local curvature           = arc_now:k()
 
         local curvature_direction = 1 -- clockwise
@@ -204,7 +202,6 @@ local function PositionControlFactory(radius_min, radius_max)
 
         local radius = 0.785 / curvature
         local radius_scaled = radius / ahrs:get_EAS2TAS() ^ 2
-        -- local radius_scaled = radius
         local loc_center = Location_from_TrackSpot(state_now, spot_now)
         loc_center:offset_bearing(math.deg(center_bearing), radius)
 
@@ -226,19 +223,18 @@ local function PositionControlFactory(radius_min, radius_max)
         --     p_spot_n(spot_now), p_spot_e(spot_now),
         --     p_loc_n(state_now:loc()), p_loc_e(state_now:loc())))
     end
-
-    return position_control
 end
 
 local function SpeedControlFactory(kP, kI, iMax, spd_min, spd_mid, spd_max)
     local pi_controller = PI_controller(kP, kI, iMax, spd_min - spd_mid, spd_max - spd_mid)
 
-    local function speed_control(state_now, spot_now)
+    return function(state_now, spot_now)
         local dist_to_spot = distance_to_spot(state_now, spot_now)
         local bear_to_spot = bearing_to_spot(state_now, spot_now)
 
         -- The angle between desired heading and vector to spot
-        local alpha = bear_to_spot - spot_now:theta()
+        -- angle is ositive -> vector to spot is right of desired heading.
+        local alpha = wrap_angle.rad_pi(bear_to_spot - spot_now:theta())
         local e = dist_to_spot * math.cos(alpha)
         local u = pi_controller.update(0, e)
 
@@ -254,16 +250,32 @@ local function SpeedControlFactory(kP, kI, iMax, spd_min, spd_mid, spd_max)
             p3 = 1000,
         })
 
+        -- error longitudinal (el): positive -> ahead of spot, negative -> behind spot
+        -- error tangential (et): positive -> to left of vector to spot, negative -> to right
         gcs_send(string.format(
-            "el:%.1f, et:%.1f, spot(%.1f, %.1f) n(%.0f, %.0f)",
-            e, dist_to_spot * math.sin(alpha),
+            "el:%.1f, et:%.1f, a:%.0f, spot(%.1f, %.1f) n(%.0f, %.0f)",
+            e, dist_to_spot * math.sin(alpha), math.deg(alpha),
             p_spot_n(spot_now), p_spot_e(spot_now),
             p_loc_n(state_now:loc()), p_loc_e(state_now:loc())))
     end
-
-    return speed_control
 end
 
+local function AltitudeControlFactory(alt_target)
+    return function()
+        gcs:run_command_int(MAV_CMD_GUIDED_CHANGE_ALTITUDE, {
+            frame = MAV_FRAME_GLOBAL_RELATIVE_ALT,
+            z = alt_target,
+            p3 = 100,
+        })
+    end
+end
+
+local function PathTimeFactory()
+    local time_start = millis():tofloat() * 0.001
+    return function()
+        return millis():tofloat() * 0.001 - time_start
+    end
+end
 
 local function Guider()
     local loc_home = ahrs:get_home()
@@ -271,11 +283,12 @@ local function Guider()
         gcs_send("Guider: get_home() failed")
         return nil
     end
-    local state_start = ahrs_state.StateStartFactory(loc_home)
-    local state_last = ahrs_state.StateCurrentFactory(state_start)
-    p_setup(state_start, loc_home)
+    p_setup(loc_home)
 
-    if not state_start or not state_last then
+    local time_path = PathTimeFactory()
+    local state_last = ahrs_state.StateLastFactory(loc_home)
+
+    if not state_last then
         gcs_send("Guider: StateCurrent() failed")
         return nil
     end
@@ -287,14 +300,14 @@ local function Guider()
         vehicle:set_mode(saved_mode)
     end
 
-    local figure_8 = track.BuildFigureEightFactory(3)
-    local this_track = track.Track(figure_8, figure_8, figure_8, figure_8)
+    -- local figure_8 = track.BuildFigureEightFactory(3)
+    -- local this_track = track.Track(figure_8, figure_8, figure_8, figure_8)
     -- local track_line = track.Track({ { 1, 0 } })
     -- local this_track = track.Track(track_line, track_line, track_line, track_line)
-    -- local track_circle = track.Track({ { 2 * math.pi, 1 } })
+    -- local track_circle = track.Track({ { 2 * math.pi, 2 } })
     -- local this_track = track.Track(track_circle, track_circle, track_circle, track_circle)
-    -- local track_2circle = track.Track({ { 2 * math.pi, 1 }, { 2 * math.pi, -1 } })
-    -- local this_track = track.Track(track_2circle, track_2circle, track_2circle, track_2circle)
+    local track_2circle = track.Track({ { math.pi, 2 }, { math.pi, -2 } })
+    local this_track = track.Track(track_2circle, track_2circle, track_2circle, track_2circle)
     local spot_home = track.TrackSpot(0, 0, math.pi * 0.2)
     this_track:set_transform(spot_home, 100, params.spd.mid, 0)
 
@@ -305,12 +318,38 @@ local function Guider()
         params.spd.pi_kP, params.spd.pi_kI, params.spd.pi_iMax,
         params.spd.min, params.spd.mid, params.spd.max)
 
-    gcs_send(string.format("Home:%i, %i", p_loc_n(loc_home), p_loc_e(loc_home)))
+    local altitude_control = AltitudeControlFactory(params.alt.target)
+
+    local final_s = this_track:end_s()
+
+    local arc_now = this_track:arc_along_track(0)
+    local skip_update_count = 0
+
+    local function skip_update(t_path)
+        if t_path > arc_now:end_s() and t_path <= final_s then
+            arc_now = this_track:arc_along_track(t_path)
+            skip_update_count = 0
+            return false
+        end
+
+        if skip_update_count > params.tim.update_skip_max then
+            skip_update_count = 0
+            return false
+        end
+
+        skip_update_count = skip_update_count + 1
+        return true
+    end
 
     return function(abort)
         if abort then
             finish()
             return false
+        end
+
+        local t_path = time_path()
+        if skip_update(t_path) then
+            return true
         end
 
         local state_now = ahrs_state.StateCurrentFactory(state_last)
@@ -319,12 +358,11 @@ local function Guider()
             return false
         end
 
-        local t = state_now:time_total()
-        local arc_now = this_track:arc_along_track(t)
-        local spot_now = arc_now:along_arc(t)
+        local spot_now = arc_now:along_arc(t_path)
 
         position_control(state_now, arc_now, spot_now)
         speed_control(state_now, spot_now)
+        altitude_control()
 
         state_last = state_now
         return true
