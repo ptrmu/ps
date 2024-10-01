@@ -113,6 +113,15 @@ local function define_classes(gcs_send, wrap_angle)
             return ta
         end
 
+        cls.s_back_one_period = function(self)
+            local k = math.abs(self[IDX_K])
+            local t_adj = 0
+            if k > 0.0001 then
+                t_adj = (2 * math.pi / k) * self.size_scale / self.s_scale
+            end
+            return -t_adj
+        end
+
         cls.s = function(self) return self[IDX_S] * self.size_scale / self.s_scale end
         cls.k = function(self) return self[IDX_K] / self.size_scale end
         cls.s_raw = function(self) return self[IDX_S] end

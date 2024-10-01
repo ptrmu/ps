@@ -1,4 +1,4 @@
-local gcs_send                          = require("gcs_send_funcfactory")("TTR")
+local gcs_send                          = require("gcs_send_funcfactory")("TRR")
 local wrap_angle                        = require("wrap_angle_obj")
 local stuf                              = require("switch_trigger_update_function")("track_repos_v2", gcs_send)
 local track                             = require("track_obj")(gcs_send, wrap_angle)
@@ -6,6 +6,7 @@ local ahrs_state                        = require("ahrs_state")(gcs_send, wrap_a
 local StateCurrent                      = ahrs_state.StateCurrent
 
 local GUIDING_TIME_MS                   = 100
+local TRANSMITTER_SWITCH_CODE           = 300
 
 local PLANE_MODE_GUIDED                 = 15
 
@@ -27,11 +28,11 @@ local params                            = {
         update_skip_max = 2,
     },
     spd = {
-        min = 10,
-        mid = 15,
+        min = 12,
+        mid = 16,
         max = 20,
         pi_kP = .25,
-        pi_kI = .025,
+        pi_kI = .01,
         pi_iMax = 4,
         pi_min = -4,
         pi_max = 4,
@@ -62,7 +63,6 @@ local function p_setup(loc_origin)
     p_loc_lat = function(loc) return loc:lat() - lat_origin end
     p_loc_lng = function(loc) return loc:lng() - lng_origin end
 end
-
 
 -- constrain a value between limits
 local function constrain(v, vmin, vmax)
@@ -165,14 +165,14 @@ local function Location_from_TrackSpot(state, spot)
 end
 
 local function distance_to_spot(state, spot)
-    local dn = state.distance_NE:x() - spot:n()
-    local de = state.distance_NE:y() - spot:e()
+    local dn = spot:n() - state.distance_NE:x()
+    local de = spot:e() - state.distance_NE:y()
     return math.sqrt(dn * dn + de * de)
 end
 
 local function bearing_to_spot(state, spot)
-    local dn = state.distance_NE:x() - spot:n()
-    local de = state.distance_NE:y() - spot:e()
+    local dn = spot:n() - state.distance_NE:x()
+    local de = spot:e() - state.distance_NE:y()
     return math.atan(de, dn)
 end
 
@@ -180,7 +180,7 @@ local function PositionControlFactory(radius_min, radius_max)
     local curvature_min = 1 / radius_max
     local curvature_max = 1 / radius_min
 
-    return function(state_now, arc_now, spot_now)
+    return function(t_path, t_path_last, state_now, arc_now, spot_now)
         local curvature           = arc_now:k()
 
         local curvature_direction = 1 -- clockwise
@@ -222,24 +222,30 @@ local function PositionControlFactory(radius_min, radius_max)
         --     p_loc_n(loc_center), p_loc_e(loc_center),
         --     p_spot_n(spot_now), p_spot_e(spot_now),
         --     p_loc_n(state_now:loc()), p_loc_e(state_now:loc())))
+
+        ---@diagnostic disable-next-line: param-type-mismatch
+        logger.write("TRRP", 'RadD,RadS,CrvD,CrvA', 'ffff', radius, radius_scaled, curvature,
+            state_now:curvature(t_path - t_path_last))
     end
 end
+
+local time_last_message = uint32_t(0)
 
 local function SpeedControlFactory(kP, kI, iMax, spd_min, spd_mid, spd_max)
     local pi_controller = PI_controller(kP, kI, iMax, spd_min - spd_mid, spd_max - spd_mid)
 
-    return function(state_now, spot_now)
+    return function(t_path, state_now, arc_now, spot_now)
         local dist_to_spot = distance_to_spot(state_now, spot_now)
         local bear_to_spot = bearing_to_spot(state_now, spot_now)
 
         -- The angle between desired heading and vector to spot
-        -- angle is ositive -> vector to spot is right of desired heading.
         local alpha = wrap_angle.rad_pi(bear_to_spot - spot_now:theta())
-        local e = dist_to_spot * math.cos(alpha)
-        local u = pi_controller.update(0, e)
+        local el = dist_to_spot * math.cos(alpha)
+        local et = dist_to_spot * math.sin(alpha)
+        local u = pi_controller.update(0, el)
 
         -- speed_desired -
-        local speed_desired = spd_mid + u
+        local speed_desired = spd_mid - u
 
         -- p1 = type (SPEED_TYPE_AIRSPEED)
         -- p2 = airspeed
@@ -250,13 +256,26 @@ local function SpeedControlFactory(kP, kI, iMax, spd_min, spd_mid, spd_max)
             p3 = 1000,
         })
 
-        -- error longitudinal (el): positive -> ahead of spot, negative -> behind spot
-        -- error tangential (et): positive -> to left of vector to spot, negative -> to right
-        gcs_send(string.format(
-            "el:%.1f, et:%.1f, a:%.0f, spot(%.1f, %.1f) n(%.0f, %.0f)",
-            e, dist_to_spot * math.sin(alpha), math.deg(alpha),
-            p_spot_n(spot_now), p_spot_e(spot_now),
-            p_loc_n(state_now:loc()), p_loc_e(state_now:loc())))
+        -- error longitudinal (el): positive -> hehind of spot, negative -> ahead spot
+        -- error tangential (et): positive -> to right of vector to spot, negative -> to left
+        -- gcs_send(string.format(
+        --     "el:%.1f, et:%.1f, a:%.0f, spot(%.1f, %.1f) n(%.0f, %.0f), s:%.0f, k:%.3f, t:%.2f",
+        --     el, et, math.deg(alpha),
+        --     p_spot_n(spot_now), p_spot_e(spot_now),
+        --     p_loc_n(state_now:loc()), p_loc_e(state_now:loc()),
+        --     arc_now:s(), arc_now:k(), t_path))
+
+        local time_this_message = millis()
+        if time_this_message - time_last_message > 2000 then
+            time_last_message = time_this_message
+            gcs_send(string.format("el:%.1f, et:%.1f", el, et))
+        end
+
+        ---@diagnostic disable-next-line: param-type-mismatch
+        logger.write("TRRS", 'El,U,SpdD,SpdA,Et,E,SptN,SptE,SptT,LocN,LocE,LocT', 'ffffffffffff', el, u, speed_desired,
+            state_now:speed(), et, dist_to_spot,
+            p_spot_n(spot_now), p_spot_e(spot_now), math.deg(spot_now:theta()),
+            p_loc_n(state_now:loc()), p_loc_e(state_now:loc()), math.deg(state_now:vel_bearing()))
     end
 end
 
@@ -272,8 +291,16 @@ end
 
 local function PathTimeFactory()
     local time_start = millis():tofloat() * 0.001
-    return function()
-        return millis():tofloat() * 0.001 - time_start
+    return function(reset_time_adjustment)
+        local time_now = millis():tofloat() * 0.001
+        if not reset_time_adjustment then
+            return time_now - time_start
+        end
+        time_start = time_start - reset_time_adjustment
+        if time_now - time_start > 0 then
+            time_start = time_now
+        end
+        return time_now - time_start
     end
 end
 
@@ -286,12 +313,19 @@ local function Guider()
     p_setup(loc_home)
 
     local time_path = PathTimeFactory()
-    local state_last = ahrs_state.StateLastFactory(loc_home)
 
+    local state_last = ahrs_state.StateLastFactory(loc_home)
     if not state_last then
         gcs_send("Guider: StateCurrent() failed")
         return nil
     end
+
+    local option_switch = rc:find_channel_for_option(TRANSMITTER_SWITCH_CODE)
+    if not option_switch then
+        gcs_send("Guider: find_channel_for_option failed")
+        return nil
+    end
+
 
     local saved_mode = vehicle:get_mode()
     vehicle:set_mode(PLANE_MODE_GUIDED)
@@ -300,14 +334,14 @@ local function Guider()
         vehicle:set_mode(saved_mode)
     end
 
-    -- local figure_8 = track.BuildFigureEightFactory(3)
-    -- local this_track = track.Track(figure_8, figure_8, figure_8, figure_8)
+    local figure_8 = track.BuildFigureEightFactory(3)
+    local this_track = track.Track(figure_8, figure_8, figure_8, figure_8)
     -- local track_line = track.Track({ { 1, 0 } })
     -- local this_track = track.Track(track_line, track_line, track_line, track_line)
     -- local track_circle = track.Track({ { 2 * math.pi, 2 } })
     -- local this_track = track.Track(track_circle, track_circle, track_circle, track_circle)
-    local track_2circle = track.Track({ { math.pi, 2 }, { math.pi, -2 } })
-    local this_track = track.Track(track_2circle, track_2circle, track_2circle, track_2circle)
+    -- local track_2circle = track.Track({ { math.pi, 2 }, { math.pi, -2 } })
+    -- local this_track = track.Track(track_2circle, track_2circle, track_2circle, track_2circle)
     local spot_home = track.TrackSpot(0, 0, math.pi * 0.2)
     this_track:set_transform(spot_home, 100, params.spd.mid, 0)
 
@@ -322,24 +356,71 @@ local function Guider()
 
     local final_s = this_track:end_s()
 
-    local arc_now = this_track:arc_along_track(0)
+    local arc_first = this_track:arc_along_track(0)
+    local arc_now = arc_first
     local skip_update_count = 0
+    local t_path_last = time_path()
 
     local function skip_update(t_path)
-        if t_path > arc_now:end_s() and t_path <= final_s then
-            arc_now = this_track:arc_along_track(t_path)
+        local function return_noskip()
             skip_update_count = 0
             return false
         end
-
-        if skip_update_count > params.tim.update_skip_max then
-            skip_update_count = 0
-            return false
+        local function return_test_skip()
+            if skip_update_count > params.tim.update_skip_max then
+                return return_noskip()
+            end
+            skip_update_count = skip_update_count + 1
+            return true
         end
 
-        skip_update_count = skip_update_count + 1
-        return true
+        local function process_first_arc_only()
+            -- not at the end of current arc
+            if t_path < arc_now:end_s() then
+                if arc_now == arc_first then
+                    return return_test_skip()
+                end
+                -- reset to first arc, reset time to now
+                t_path_last = time_path(0)
+                arc_now = this_track:arc_along_track(0)
+                return return_noskip()
+            end
+
+            -- ready to move to next arc
+            -- if already on first arc, don't advance, just reset time so t=0
+            -- happens when the plane reaches the track start (negative times)
+            if arc_now == arc_first then
+                t_path_last = time_path(arc_now:s_back_one_period())
+                return return_noskip()
+            end
+
+            -- low probability case: changed to first_arc_only mode at the exact
+            -- instant when the plane transitions from non-first arc.
+            -- reset to first arc, reset time to now
+            t_path_last = time_path(0)
+            arc_now = this_track:arc_along_track(0)
+            return return_noskip()
+        end
+
+        local first_arc_only = option_switch:get_aux_switch_pos() == 1
+        if first_arc_only then
+            return process_first_arc_only()
+        end
+
+        -- process normal mode - not in first_arc_only mode.
+        if t_path >= arc_now:end_s() then
+            -- move to the next arc if not at the end of the track
+            if t_path <= final_s then
+                arc_now = this_track:arc_along_track(t_path)
+                return return_noskip()
+            end
+
+            -- stay with the last arc if at the end of the track.
+        end
+
+        return return_test_skip()
     end
+
 
     return function(abort)
         if abort then
@@ -360,14 +441,15 @@ local function Guider()
 
         local spot_now = arc_now:along_arc(t_path)
 
-        position_control(state_now, arc_now, spot_now)
-        speed_control(state_now, spot_now)
+        position_control(t_path, t_path_last, state_now, arc_now, spot_now)
+        speed_control(t_path, state_now, arc_now, spot_now)
         altitude_control()
 
         state_last = state_now
+        t_path_last = t_path
         return true
     end
 end
 
 
-return stuf.SwitchTriggerUpdateFunction(Guider, GUIDING_TIME_MS, 300)
+return stuf.SwitchTriggerUpdateFunction(Guider, GUIDING_TIME_MS, TRANSMITTER_SWITCH_CODE)

@@ -141,12 +141,11 @@ local function define_classes(gcs_send, wrap_angle)
             return self
         end
 
-        cls.curvature = function(self)
-            local time_delta_tmp = self:time_delta()
-            if time_delta_tmp == 0 then
+        cls.curvature = function(self, t_delta)
+            if t_delta == 0 then
                 return 0
             end
-            return wrap_angle.rad_pi(self:vel_bearing() - self[IDX_STATE_LAST]:vel_bearing()) / time_delta_tmp /
+            return wrap_angle.rad_pi(self:vel_bearing() - self[IDX_STATE_LAST]:vel_bearing()) / t_delta /
                 self:speed_avg()
         end
 
